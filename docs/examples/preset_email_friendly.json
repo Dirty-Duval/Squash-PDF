@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "preset": {
+    "name": "email_friendly",
+    "display_name": "Email Friendly",
+    "description": "Balanced compression suitable for email attachments (target: under 2MB)",
+    "dpi": 120,
+    "color_image_resolution": 120,
+    "gray_image_resolution": 120,
+    "mono_image_resolution": 400,
+    "pdf_settings": "/ebook",
+    "target_reduction": "60-75%",
+    "is_custom": true
+  }
+}

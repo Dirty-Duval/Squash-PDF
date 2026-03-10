@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "preset": {
+    "name": "print_quality",
+    "display_name": "Print Quality",
+    "description": "High quality for professional printing with minimal compression",
+    "dpi": 300,
+    "color_image_resolution": 300,
+    "gray_image_resolution": 300,
+    "mono_image_resolution": 1200,
+    "pdf_settings": "/prepress",
+    "target_reduction": "20-35%",
+    "is_custom": true
+  }
+}

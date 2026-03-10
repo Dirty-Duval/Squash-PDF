@@ -1,0 +1,15 @@
+{
+  "version": "2.0.0",
+  "preset": {
+    "name": "web_optimized",
+    "display_name": "Web Optimized",
+    "description": "Optimized for web viewing with minimal file size while maintaining readability",
+    "dpi": 96,
+    "color_image_resolution": 96,
+    "gray_image_resolution": 96,
+    "mono_image_resolution": 300,
+    "pdf_settings": "/screen",
+    "target_reduction": "75-85%",
+    "is_custom": true
+  }
+}
