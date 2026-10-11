@@ -99,7 +99,9 @@ class MainWindow(CTkDnD):
             StartupError: If Ghostscript cannot be found (after telling the user).
         """
         super().__init__()
-        self.withdraw()  # stay hidden until fully built
+        # Do NOT call withdraw() here. CustomTkinter keeps the root hidden until
+        # mainloop() on Windows and only reveals it then if withdraw() was never
+        # called beforehand; an early withdraw() leaves the app running invisibly.
 
         self.config_manager = config_manager or ConfigManager()
         if config_manager is None:
@@ -158,7 +160,6 @@ class MainWindow(CTkDnD):
 
         if settings.window_maximized:
             self.after(0, lambda: self.state("zoomed"))
-        self.deiconify()
 
         if settings.check_updates:
             self.after(3000, self._start_update_check)

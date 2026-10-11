@@ -2,6 +2,12 @@
 
 All notable changes to Squash PDF Compressor.
 
+## 2.2.1 - 2026-10-11
+
+### Fixed
+- The application started invisibly in 2.2.0: the main window called `withdraw()` while building itself, and CustomTkinter 6 then never reveals the root window on Windows. The process ran with no window to click. Every 2.2.0 user should take this update.
+- The silent-upgrade path no longer drops the desktop shortcut.
+
 ## 2.2.0 - 2026-10-10
 
 ### Fixed

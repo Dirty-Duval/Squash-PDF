@@ -5,7 +5,7 @@
 #define AppName "Squash PDF Compressor"
 ; AppVersion is normally passed by build_installer.bat (read from src/squash/__init__.py).
 #ifndef AppVersion
-  #define AppVersion "2.2.0"
+  #define AppVersion "2.2.1"
 #endif
 #define AppPublisher "ACWul"
 #define AppURL "https://github.com/Dirty-Duval/Squash-PDF"
