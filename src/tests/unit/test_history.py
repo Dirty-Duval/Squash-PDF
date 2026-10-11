@@ -15,7 +15,7 @@ def create_mock_result(
     original: int = 1000000,
     compressed: int = 500000,
     preset: str = "medium",
-    success: bool = True
+    success: bool = True,
 ) -> CompressionResult:
     """Create a mock CompressionResult for testing.
 
@@ -42,7 +42,7 @@ def create_mock_result(
         preset_used=preset,
         timestamp=datetime.now(),
         error_code=None if success else "ERROR",
-        error_message=None if success else "Test error"
+        error_message=None if success else "Test error",
     )
 
 
@@ -97,8 +97,9 @@ class TestHistoryManager:
         entries = manager.get_recent()
         assert len(entries) == 3
 
-    def test_enforce_50_entry_limit(self, tmp_path):
+    def test_enforce_entry_limit(self, tmp_path, monkeypatch):
         """Test automatic cleanup of old entries when limit exceeded."""
+        monkeypatch.setattr(HistoryManager, "MAX_ENTRIES", 50)
         manager = HistoryManager(tmp_path / "test.db")
 
         # Add 60 entries
@@ -113,6 +114,16 @@ class TestHistoryManager:
         # Verify newest entries are kept (file50-file59)
         newest_entry = entries[0]
         assert "file59" in newest_entry.input_path
+
+    def test_timestamps_round_trip(self, tmp_path):
+        """Timestamps are stored as ISO text and read back as datetimes."""
+        manager = HistoryManager(tmp_path / "test.db")
+        result = create_mock_result("t.pdf")
+        result.timestamp = datetime(2026, 3, 4, 5, 6, 7, 123456)
+        manager.add_entry(result)
+
+        entry = manager.get_recent()[0]
+        assert entry.timestamp == result.timestamp
 
     def test_get_recent_with_limit(self, tmp_path):
         """Test retrieving recent entries with custom limit."""
@@ -257,7 +268,7 @@ class TestHistoryManager:
             duration=2.5,
             timestamp=datetime.now(),
             success=True,
-            error_message=None
+            error_message=None,
         )
 
         assert entry.id == 1

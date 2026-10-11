@@ -15,19 +15,18 @@ Usage:
 import json
 import logging
 import subprocess
-import sys
 import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
-from urllib import error as url_error
 from urllib import request
+
+from .. import GITHUB_REPO
+from .. import __version__ as APP_VERSION
 
 logger = logging.getLogger(__name__)
 
-APP_VERSION = "2.1.0"
-GITHUB_REPO = "Dirty-Duval/Squash-PDF"
 _API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
 _REQUEST_TIMEOUT = 8  # seconds
 
@@ -50,12 +49,12 @@ def _is_newer(remote_tag: str, local_version: str = APP_VERSION) -> bool:
 class ReleaseInfo:
     """Metadata for an available GitHub release."""
 
-    tag: str           # e.g. "v2.1.0"
-    version: str       # tag without leading 'v'
-    name: str          # release title
-    body: str          # release notes (markdown)
+    tag: str  # e.g. "v2.1.0"
+    version: str  # tag without leading 'v'
+    name: str  # release title
+    body: str  # release notes (markdown)
     download_url: str  # URL of the Setup exe asset
-    asset_name: str    # filename of the asset
+    asset_name: str  # filename of the asset
 
 
 class UpdateChecker:
@@ -96,6 +95,7 @@ class UpdateChecker:
         Returns:
             Path to the downloaded installer, or None on failure.
         """
+        tmp_path: Optional[Path] = None
         try:
             tmp = tempfile.NamedTemporaryFile(
                 suffix=".exe",
@@ -130,7 +130,7 @@ class UpdateChecker:
 
         except Exception as exc:
             logger.error(f"Installer download failed: {exc}")
-            if tmp_path.exists():
+            if tmp_path is not None:
                 tmp_path.unlink(missing_ok=True)
             return None
 
@@ -153,8 +153,7 @@ class UpdateChecker:
                     "/CLOSEAPPLICATIONS",
                     "/RESTARTAPPLICATIONS",
                 ],
-                creationflags=subprocess.DETACHED_PROCESS
-                | subprocess.CREATE_NEW_PROCESS_GROUP,
+                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP,
             )
             logger.info("Installer launched, quitting app")
         except Exception as exc:

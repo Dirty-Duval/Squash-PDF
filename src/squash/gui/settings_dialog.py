@@ -1,619 +1,472 @@
 """
 Settings dialog for Squash PDF Compressor.
 
-Provides a modal dialog interface for configuring application settings including
-theme, output location, Ghostscript path, and logging level.
+Modal dialog for theme, output location and naming, compression timeout,
+Ghostscript path, logging and privacy preferences. Every option shown here
+is actually honoured by the application.
 """
 
-import customtkinter as ctk
-from tkinter import filedialog
-from pathlib import Path
-from typing import Optional, Tuple, List
-import subprocess
-import logging
+from __future__ import annotations
 
-from ..config.manager import ConfigManager, Settings
+import logging
+from pathlib import Path
+from tkinter import filedialog
+from typing import List, Optional, Tuple
+
+import customtkinter as ctk
+
+from ..config.manager import SAME_FOLDER, VALID_LOG_LEVELS, ConfigManager, Settings
+from ..core.batch import resolve_output_path
+from ..core.ghostscript import GhostscriptWrapper, detect_ghostscript
+from ..utils.filesystem import FileSystemHelper
+from ..utils.logger import set_log_level
 from ._icon import apply_icon
+from .appearance import apply_appearance
+from .dialogs import ask_yes_no, fit_to_content, show_error
 
 logger = logging.getLogger(__name__)
 
+_MIN_TIMEOUT = 30
+_MAX_TIMEOUT = 3600
+_HINT = ("gray45", "gray60")
+_OK = ("#43A047", "#50C878")
+_WARN = ("#E08A00", "#FFA500")
+
 
 class SettingsDialog(ctk.CTkToplevel):
-    """
-    Settings configuration dialog.
-
-    Provides UI for modifying application settings with validation and
-    immediate theme preview.
-    """
+    """Settings configuration dialog with validation and live theme preview."""
 
     def __init__(self, parent, config_manager: ConfigManager):
         """
-        Initialize settings dialog.
-
         Args:
-            parent: Parent window (MainWindow instance)
-            config_manager: ConfigManager instance for settings persistence
+            parent: Parent window (MainWindow instance).
+            config_manager: ConfigManager used to read and persist settings.
         """
         super().__init__(parent)
-
         self.config_manager = config_manager
         self.parent_window = parent
+        self.original_settings = Settings(**config_manager.settings.to_dict())
+        self.saved = False
 
-        # Store original settings for Cancel operation
-        self.original_settings = Settings(**self.config_manager.settings.to_dict())
-
-        # Configure dialog window
         self.title("Settings")
-        self.geometry("600x550")
         self.resizable(False, False)
-
-        # Make dialog modal
         self.transient(parent)
-        self.grab_set()
 
-        # Center dialog on parent
-        self._center_on_parent()
-
-        # Build UI
         self._setup_ui()
+        self._load_settings(config_manager.settings)
 
-        # Load current settings
-        self._load_settings()
-
-        # Bind keyboard shortcuts
-        self.bind("<Escape>", lambda e: self._on_cancel())
-        self.bind("<Return>", lambda e: self._on_ok())
+        self.bind("<Escape>", lambda _e: self._on_cancel())
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
 
         apply_icon(self)
+        fit_to_content(self, min_width=640, parent=parent)
+        self.grab_set()
+        self.focus()
         logger.info("Settings dialog opened")
 
-    def _center_on_parent(self) -> None:
-        """Center dialog on parent window."""
-        self.update_idletasks()
-
-        parent_x = self.parent_window.winfo_x()
-        parent_y = self.parent_window.winfo_y()
-        parent_width = self.parent_window.winfo_width()
-        parent_height = self.parent_window.winfo_height()
-
-        dialog_width = self.winfo_width()
-        dialog_height = self.winfo_height()
-
-        x = parent_x + (parent_width - dialog_width) // 2
-        y = parent_y + (parent_height - dialog_height) // 2
-
-        self.geometry(f"+{x}+{y}")
+    # ------------------------------------------------------------------ #
+    # Layout                                                               #
+    # ------------------------------------------------------------------ #
 
     def _setup_ui(self) -> None:
-        """Build the complete UI layout."""
-        # Main container with padding
-        main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
 
-        # Configure grid
-        main_frame.grid_columnconfigure(0, weight=1)
+        # Plain frame (not scrollable) so the dialog can size itself to show everything.
+        self.scroll = ctk.CTkFrame(self, fg_color="transparent")
+        self.scroll.grid(row=0, column=0, padx=16, pady=(16, 0), sticky="nsew")
+        self.scroll.grid_columnconfigure(0, weight=1)
 
-        # === SECTION 1: Appearance ===
-        self._create_appearance_section(main_frame, row=0)
+        self._create_appearance_section(0)
+        self._create_output_section(1)
+        self._create_compression_section(2)
+        self._create_ghostscript_section(3)
+        self._create_logging_section(4)
+        self._create_button_bar()
 
-        # === SECTION 2: Output Location ===
-        self._create_output_section(main_frame, row=1)
-
-        # === SECTION 3: Ghostscript ===
-        self._create_ghostscript_section(main_frame, row=2)
-
-        # === SECTION 4: Logging ===
-        self._create_logging_section(main_frame, row=3)
-
-        # === SECTION 5: Privacy ===
-        self._create_privacy_section(main_frame, row=4)
-
-        # === DIALOG BUTTONS ===
-        self._create_button_section(main_frame, row=5)
-
-    def _create_appearance_section(self, parent, row: int) -> None:
-        """Create appearance/theme section."""
-        frame = ctk.CTkFrame(parent)
-        frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
+    def _section(self, row: int, title: str) -> ctk.CTkFrame:
+        frame = ctk.CTkFrame(self.scroll)
+        frame.grid(row=row, column=0, sticky="ew", pady=(0, 8))
         frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(frame, text=title, font=ctk.CTkFont(size=14, weight="bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=12, pady=(8, 4)
+        )
+        return frame
 
-        # Label
+    @staticmethod
+    def _hint(frame, row: int, text: str, columnspan: int = 3) -> ctk.CTkLabel:
         label = ctk.CTkLabel(
             frame,
-            text="Appearance",
-            font=ctk.CTkFont(size=14, weight="bold")
+            text=text,
+            font=ctk.CTkFont(size=11),
+            text_color=_HINT,
+            justify="left",
+            anchor="w",
+            wraplength=540,
         )
-        label.grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 5))
+        label.grid(row=row, column=0, columnspan=columnspan, sticky="w", padx=12, pady=(0, 8))
+        return label
 
-        # Theme selection
+    def _create_appearance_section(self, row: int) -> None:
+        frame = self._section(row, "Appearance")
         self.theme_var = ctk.StringVar(value="system")
 
-        theme_label = ctk.CTkLabel(frame, text="Theme:")
-        theme_label.grid(row=1, column=0, sticky="w", padx=10, pady=5)
+        ctk.CTkLabel(frame, text="Theme:").grid(row=1, column=0, sticky="w", padx=12, pady=4)
+        radios = ctk.CTkFrame(frame, fg_color="transparent")
+        radios.grid(row=1, column=1, columnspan=2, sticky="w", padx=12, pady=4)
+        for value, text in (("system", "System"), ("light", "Light"), ("dark", "Dark")):
+            ctk.CTkRadioButton(
+                radios,
+                text=text,
+                variable=self.theme_var,
+                value=value,
+                command=self._on_theme_change,
+            ).pack(side="left", padx=(0, 14))
+        self._hint(frame, 2, "Changes preview immediately and are kept when you click Save.")
 
-        radio_frame = ctk.CTkFrame(frame, fg_color="transparent")
-        radio_frame.grid(row=1, column=1, sticky="w", padx=10, pady=5)
+    def _create_output_section(self, row: int) -> None:
+        frame = self._section(row, "Output")
 
-        self.system_radio = ctk.CTkRadioButton(
-            radio_frame,
-            text="System",
-            variable=self.theme_var,
-            value="system",
-            command=self._on_theme_change
+        ctk.CTkLabel(frame, text="Save to:").grid(row=1, column=0, sticky="w", padx=12, pady=4)
+        self.output_folder_entry = ctk.CTkEntry(
+            frame, placeholder_text="Same folder as the original (default)"
         )
-        self.system_radio.pack(side="left", padx=(0, 10))
+        self.output_folder_entry.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        folder_buttons = ctk.CTkFrame(frame, fg_color="transparent")
+        folder_buttons.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=4)
+        ctk.CTkButton(
+            folder_buttons, text="Browse", width=76, command=self._browse_output_folder
+        ).pack(side="left")
+        ctk.CTkButton(
+            folder_buttons,
+            text="Same folder",
+            width=96,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("#1A1208", "#F0E8DC"),
+            command=lambda: self.output_folder_entry.delete(0, "end"),
+        ).pack(side="left", padx=(6, 0))
 
-        self.light_radio = ctk.CTkRadioButton(
-            radio_frame,
-            text="Light",
-            variable=self.theme_var,
-            value="light",
-            command=self._on_theme_change
-        )
-        self.light_radio.pack(side="left", padx=(0, 10))
+        ctk.CTkLabel(frame, text="File name:").grid(row=2, column=0, sticky="w", padx=12, pady=4)
+        self.pattern_entry = ctk.CTkEntry(frame, placeholder_text="{filename}_compressed.pdf")
+        self.pattern_entry.grid(row=2, column=1, columnspan=2, sticky="ew", padx=(6, 12), pady=4)
+        self.pattern_entry.bind("<KeyRelease>", lambda _e: self._refresh_pattern_preview())
 
-        self.dark_radio = ctk.CTkRadioButton(
-            radio_frame,
-            text="Dark",
-            variable=self.theme_var,
-            value="dark",
-            command=self._on_theme_change
-        )
-        self.dark_radio.pack(side="left")
-
-        # Description
-        desc = ctk.CTkLabel(
+        self.pattern_preview = self._hint(
             frame,
-            text="Choose application color theme",
-            font=ctk.CTkFont(size=11),
-            text_color="gray"
+            3,
+            "Use {filename} for the original name. Existing files are never overwritten.",
         )
-        desc.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 10))
 
-    def _create_output_section(self, parent, row: int) -> None:
-        """Create output location section."""
-        frame = ctk.CTkFrame(parent)
-        frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
-        frame.grid_columnconfigure(1, weight=1)
-
-        # Label
-        label = ctk.CTkLabel(
+    def _create_compression_section(self, row: int) -> None:
+        frame = self._section(row, "Compression")
+        ctk.CTkLabel(frame, text="Time limit per file:").grid(
+            row=1, column=0, sticky="w", padx=12, pady=4
+        )
+        timeout_row = ctk.CTkFrame(frame, fg_color="transparent")
+        timeout_row.grid(row=1, column=1, columnspan=2, sticky="w", padx=6, pady=4)
+        self.timeout_entry = ctk.CTkEntry(timeout_row, width=90, justify="right")
+        self.timeout_entry.pack(side="left")
+        ctk.CTkLabel(timeout_row, text="seconds").pack(side="left", padx=(8, 0))
+        self._hint(
             frame,
-            text="Default Output Location",
-            font=ctk.CTkFont(size=14, weight="bold")
+            2,
+            f"Files that take longer are stopped and reported as failed "
+            f"({_MIN_TIMEOUT}-{_MAX_TIMEOUT} seconds). Very large scanned PDFs may need more "
+            "than the default of 300.",
         )
-        label.grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 5))
-
-        # Path entry
-        path_label = ctk.CTkLabel(frame, text="Folder:")
-        path_label.grid(row=1, column=0, sticky="w", padx=10, pady=5)
-
-        self.output_folder_entry = ctk.CTkEntry(frame, placeholder_text="same_folder")
-        self.output_folder_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
-
-        browse_btn = ctk.CTkButton(
-            frame,
-            text="Browse",
-            width=80,
-            command=self._browse_output_folder
-        )
-        browse_btn.grid(row=1, column=2, sticky="e", padx=10, pady=5)
-
-        # Description
-        desc = ctk.CTkLabel(
-            frame,
-            text='Leave empty for "same_folder" or specify a custom directory',
-            font=ctk.CTkFont(size=11),
-            text_color="gray"
-        )
-        desc.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 10))
-
-    def _create_ghostscript_section(self, parent, row: int) -> None:
-        """Create Ghostscript configuration section."""
-        frame = ctk.CTkFrame(parent)
-        frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
-        frame.grid_columnconfigure(1, weight=1)
-
-        # Label
-        label = ctk.CTkLabel(
-            frame,
-            text="Ghostscript",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        label.grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(10, 5))
-
-        # Path entry
-        path_label = ctk.CTkLabel(frame, text="Executable:")
-        path_label.grid(row=1, column=0, sticky="w", padx=10, pady=5)
-
-        self.gs_path_entry = ctk.CTkEntry(frame, placeholder_text="Auto-detect")
-        self.gs_path_entry.grid(row=1, column=1, sticky="ew", padx=10, pady=5)
-
-        browse_btn = ctk.CTkButton(
-            frame,
-            text="Browse",
-            width=80,
-            command=self._browse_ghostscript
-        )
-        browse_btn.grid(row=1, column=2, sticky="e", padx=10, pady=5)
-
-        # Status label
-        self.gs_status_label = ctk.CTkLabel(
-            frame,
-            text="Status: Not validated",
-            font=ctk.CTkFont(size=11),
-            text_color="gray"
-        )
-        self.gs_status_label.grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=5)
-
-        # Auto-detect button
-        auto_detect_btn = ctk.CTkButton(
-            frame,
-            text="Auto-Detect",
-            width=120,
-            command=self._auto_detect_ghostscript
-        )
-        auto_detect_btn.grid(row=3, column=0, sticky="w", padx=10, pady=(5, 10))
-
-    def _create_logging_section(self, parent, row: int) -> None:
-        """Create logging configuration section."""
-        frame = ctk.CTkFrame(parent)
-        frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
-        frame.grid_columnconfigure(1, weight=1)
-
-        # Label
-        label = ctk.CTkLabel(
-            frame,
-            text="Logging",
-            font=ctk.CTkFont(size=14, weight="bold")
-        )
-        label.grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(10, 5))
-
-        # Log level dropdown
-        level_label = ctk.CTkLabel(frame, text="Log Level:")
-        level_label.grid(row=1, column=0, sticky="w", padx=10, pady=5)
-
-        self.log_level_var = ctk.StringVar(value="WARNING")
-        self.log_level_dropdown = ctk.CTkOptionMenu(
-            frame,
-            variable=self.log_level_var,
-            values=["DEBUG", "INFO", "WARNING", "ERROR"]
-        )
-        self.log_level_dropdown.grid(row=1, column=1, sticky="w", padx=10, pady=5)
-
-        # Description
-        desc = ctk.CTkLabel(
-            frame,
-            text="Higher levels show fewer messages",
-            font=ctk.CTkFont(size=11),
-            text_color="gray"
-        )
-        desc.grid(row=2, column=0, columnspan=2, sticky="w", padx=10, pady=(0, 10))
-
-    def _create_privacy_section(self, parent, row: int) -> None:
-        """Create privacy / update preferences section."""
-        frame = ctk.CTkFrame(parent)
-        frame.grid(row=row, column=0, sticky="ew", pady=(0, 10))
-        frame.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            frame,
-            text="Privacy",
-            font=ctk.CTkFont(size=14, weight="bold"),
-        ).grid(row=0, column=0, sticky="w", padx=10, pady=(10, 5))
-
-        self.check_updates_var = ctk.BooleanVar(
-            value=self.config_manager.settings.check_updates
-        )
+        self.keep_larger_var = ctk.BooleanVar(value=False)
         ctk.CTkCheckBox(
             frame,
-            text="Check for updates automatically on startup",
+            text="Keep the compressed file even when it is larger than the original",
+            variable=self.keep_larger_var,
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 4))
+        self._hint(
+            frame,
+            4,
+            "Off (recommended): PDFs that are already well optimised keep their original "
+            "and are reported as such instead of producing a bigger file.",
+        )
+
+    def _create_ghostscript_section(self, row: int) -> None:
+        frame = self._section(row, "Ghostscript")
+
+        ctk.CTkLabel(frame, text="Executable:").grid(row=1, column=0, sticky="w", padx=12, pady=4)
+        self.gs_path_entry = ctk.CTkEntry(frame, placeholder_text="Bundled copy (auto-detect)")
+        self.gs_path_entry.grid(row=1, column=1, sticky="ew", padx=6, pady=4)
+        gs_buttons = ctk.CTkFrame(frame, fg_color="transparent")
+        gs_buttons.grid(row=1, column=2, sticky="e", padx=(0, 12), pady=4)
+        ctk.CTkButton(gs_buttons, text="Browse", width=76, command=self._browse_ghostscript).pack(
+            side="left"
+        )
+        ctk.CTkButton(
+            gs_buttons,
+            text="Auto-detect",
+            width=96,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("#1A1208", "#F0E8DC"),
+            command=self._auto_detect_ghostscript,
+        ).pack(side="left", padx=(6, 0))
+
+        self.gs_status_label = self._hint(
+            frame, 2, "Leave empty to use the Ghostscript copy that ships with Squash."
+        )
+
+    def _create_logging_section(self, row: int) -> None:
+        frame = self._section(row, "Logging & Privacy")
+        ctk.CTkLabel(frame, text="Log level:").grid(row=1, column=0, sticky="w", padx=12, pady=4)
+        self.log_level_var = ctk.StringVar(value="INFO")
+        ctk.CTkOptionMenu(
+            frame, variable=self.log_level_var, values=list(VALID_LOG_LEVELS), width=140
+        ).grid(row=1, column=1, sticky="w", padx=6, pady=4)
+        ctk.CTkButton(
+            frame,
+            text="Open Log Folder",
+            width=140,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("#1A1208", "#F0E8DC"),
+            command=self._open_log_folder,
+        ).grid(row=1, column=2, sticky="e", padx=(0, 12), pady=4)
+        self._hint(
+            frame, 2, "DEBUG records every Ghostscript command; use it when reporting a problem."
+        )
+
+        self.check_updates_var = ctk.BooleanVar(value=True)
+        self.store_history_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            frame,
+            text="Check for updates on startup (contacts GitHub)",
             variable=self.check_updates_var,
-        ).grid(row=1, column=0, sticky="w", padx=10, pady=(0, 10))
+        ).grid(row=3, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 6))
+        ctk.CTkCheckBox(
+            frame,
+            text="Keep a local history of compressed files",
+            variable=self.store_history_var,
+        ).grid(row=4, column=0, columnspan=3, sticky="w", padx=12, pady=(0, 10))
 
-    def _create_button_section(self, parent, row: int) -> None:
-        """Create dialog control buttons."""
-        button_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        button_frame.grid(row=row, column=0, sticky="ew", pady=(10, 0))
-        button_frame.grid_columnconfigure(0, weight=1)
+    def _create_button_bar(self) -> None:
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=1, column=0, sticky="ew", padx=16, pady=14)
+        bar.grid_columnconfigure(1, weight=1)
 
-        # Button container (right-aligned)
-        btn_container = ctk.CTkFrame(button_frame, fg_color="transparent")
-        btn_container.grid(row=0, column=0, sticky="e")
+        ctk.CTkButton(
+            bar,
+            text="Reset to Defaults",
+            width=140,
+            fg_color="transparent",
+            border_width=1,
+            text_color=("#1A1208", "#F0E8DC"),
+            command=self._reset_to_defaults,
+        ).grid(row=0, column=0, sticky="w")
 
-        # Cancel button
-        cancel_btn = ctk.CTkButton(
-            btn_container,
+        ctk.CTkButton(
+            bar,
             text="Cancel",
             width=100,
-            fg_color="gray",
-            hover_color="dark gray",
-            command=self._on_cancel
+            fg_color="transparent",
+            border_width=1,
+            text_color=("#1A1208", "#F0E8DC"),
+            command=self._on_cancel,
+        ).grid(row=0, column=2, padx=(0, 8))
+        ctk.CTkButton(bar, text="Save", width=110, command=self._on_ok).grid(row=0, column=3)
+
+    # ------------------------------------------------------------------ #
+    # Loading                                                              #
+    # ------------------------------------------------------------------ #
+
+    def _set_entry(self, entry: ctk.CTkEntry, value: str) -> None:
+        entry.delete(0, "end")
+        if value:
+            entry.insert(0, value)
+
+    def _load_settings(self, settings: Settings) -> None:
+        self.theme_var.set(settings.normalized_theme)
+        self._set_entry(
+            self.output_folder_entry,
+            "" if settings.output_dir is None else str(settings.output_dir),
         )
-        cancel_btn.pack(side="left", padx=5)
-
-        # OK button
-        ok_btn = ctk.CTkButton(
-            btn_container,
-            text="OK",
-            width=100,
-            command=self._on_ok
-        )
-        ok_btn.pack(side="left", padx=5)
-
-    def _load_settings(self) -> None:
-        """Load current settings from ConfigManager into UI."""
-        settings = self.config_manager.settings
-
-        # Load theme
-        theme = settings.theme
-        self.theme_var.set(theme)
-
-        # Load output location
-        if settings.output_location != "same_folder":
-            self.output_folder_entry.delete(0, "end")
-            self.output_folder_entry.insert(0, settings.output_location)
-
-        # Load Ghostscript path
+        self._set_entry(self.pattern_entry, settings.output_naming_pattern)
+        self._set_entry(self.timeout_entry, str(settings.compression_timeout))
+        self.keep_larger_var.set(settings.keep_larger_output)
+        self._set_entry(self.gs_path_entry, settings.ghostscript_path or "")
         if settings.ghostscript_path:
-            self.gs_path_entry.delete(0, "end")
-            self.gs_path_entry.insert(0, settings.ghostscript_path)
-            # Validate loaded path
             self._validate_ghostscript_path(Path(settings.ghostscript_path))
+        self.log_level_var.set(settings.normalized_log_level)
+        self.check_updates_var.set(settings.check_updates)
+        self.store_history_var.set(settings.store_history)
+        self._refresh_pattern_preview()
 
-        # Load log level
-        self.log_level_var.set(settings.log_level)
+    def _reset_to_defaults(self) -> None:
+        defaults = Settings()
+        self._load_settings(defaults)
+        apply_appearance(defaults.theme)
+        self.gs_status_label.configure(
+            text="Leave empty to use the Ghostscript copy that ships with Squash.", text_color=_HINT
+        )
 
-        logger.debug("Settings loaded into UI")
+    # ------------------------------------------------------------------ #
+    # Field handlers                                                       #
+    # ------------------------------------------------------------------ #
 
     def _on_theme_change(self) -> None:
-        """Handle theme change with live preview."""
-        theme = self.theme_var.get()
-        ctk.set_appearance_mode(theme.capitalize())
-        logger.debug(f"Theme changed to: {theme}")
+        apply_appearance(self.theme_var.get())
+
+    def _refresh_pattern_preview(self) -> None:
+        pattern = self.pattern_entry.get().strip()
+        if not pattern:
+            pattern = Settings().output_naming_pattern
+        if "{filename}" not in pattern:
+            self.pattern_preview.configure(
+                text="The pattern must contain {filename}.", text_color=_WARN
+            )
+            return
+        example = resolve_output_path(Path("Report.pdf"), Path("."), pattern).name
+        self.pattern_preview.configure(
+            text=f"Example: Report.pdf  →  {example}    (existing files are never overwritten)",
+            text_color=_HINT,
+        )
 
     def _browse_output_folder(self) -> None:
-        """Open directory chooser for output folder."""
-        current_path = self.output_folder_entry.get().strip()
-        initial_dir = current_path if current_path and Path(current_path).exists() else Path.home()
-
+        current = self.output_folder_entry.get().strip()
+        initial = current if current and Path(current).is_dir() else str(Path.home())
         folder = filedialog.askdirectory(
-            title="Select Default Output Folder",
-            initialdir=initial_dir
+            title="Select Output Folder", initialdir=initial, parent=self
         )
-
         if folder:
-            self.output_folder_entry.delete(0, "end")
-            self.output_folder_entry.insert(0, folder)
-            logger.debug(f"Selected output folder: {folder}")
+            self._set_entry(self.output_folder_entry, str(Path(folder)))
 
     def _browse_ghostscript(self) -> None:
-        """Open file chooser for Ghostscript executable."""
         file = filedialog.askopenfilename(
             title="Select Ghostscript Executable",
-            filetypes=[("Executable", "*.exe"), ("All Files", "*.*")]
+            filetypes=[("Executable", "*.exe"), ("All Files", "*.*")],
+            parent=self,
         )
-
         if file:
-            self.gs_path_entry.delete(0, "end")
-            self.gs_path_entry.insert(0, file)
+            self._set_entry(self.gs_path_entry, file)
             self._validate_ghostscript_path(Path(file))
-            logger.debug(f"Selected Ghostscript: {file}")
 
     def _auto_detect_ghostscript(self) -> None:
-        """Auto-detect Ghostscript installation using the same logic as the engine."""
-        logger.info("Running Ghostscript auto-detection...")
-
-        from ..core.ghostscript import GhostscriptWrapper
-        gs_path = GhostscriptWrapper._detect_ghostscript(GhostscriptWrapper.__new__(GhostscriptWrapper))
-
-        if gs_path and gs_path.exists():
-            # Trust the engine's detection — it uses the same path at startup successfully.
-            # Skipping subprocess --version check which can fail in packaged environments.
-            self.gs_path_entry.delete(0, "end")
-            self.gs_path_entry.insert(0, str(gs_path))
+        found = detect_ghostscript()
+        if found is None:
             self.gs_status_label.configure(
-                text=f"✅ Auto-detected: {gs_path.name}",
-                text_color="green"
+                text="⚠ No Ghostscript installation found.", text_color=_WARN
             )
-            logger.info(f"Auto-detected Ghostscript: {gs_path}")
             return
+        self._set_entry(self.gs_path_entry, str(found))
+        self._validate_ghostscript_path(found)
 
-        # Not found
-        self.gs_status_label.configure(
-            text="⚠️ Auto-detect failed - Ghostscript not found",
-            text_color="orange"
-        )
-        self._show_error(
-            "Ghostscript Not Found",
-            "Could not auto-detect Ghostscript installation.\n\n"
-            "Please use the Browse button to manually select the executable."
-        )
+    def _open_log_folder(self) -> None:
+        log_dir = FileSystemHelper.get_app_data_dir() / "logs"
+        FileSystemHelper.ensure_directory(log_dir)
+        FileSystemHelper.open_in_file_manager(log_dir)
 
     def _validate_ghostscript_path(self, path: Path) -> Tuple[bool, str]:
-        """
-        Validate Ghostscript executable path.
-
-        Args:
-            path: Path to Ghostscript executable
-
-        Returns:
-            Tuple of (is_valid, version_or_error_message)
-        """
-        if not path.exists():
-            self.gs_status_label.configure(
-                text="⚠️ File not found",
-                text_color="orange"
-            )
-            return False, "File not found"
-
+        """Check that ``path`` is a runnable Ghostscript and update the status line."""
         if not path.is_file():
-            self.gs_status_label.configure(
-                text="⚠️ Not a file",
-                text_color="orange"
-            )
-            return False, "Not a file"
-
-        # Try to run --version
+            self.gs_status_label.configure(text="⚠ File not found.", text_color=_WARN)
+            return False, "File not found"
         try:
-            result = subprocess.run(
-                [str(path), "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
+            version = GhostscriptWrapper(path).get_version()
+        except Exception as exc:
+            version = None
+            logger.debug(f"Ghostscript validation failed: {exc}")
+        if version:
+            self.gs_status_label.configure(text=f"✓ Ghostscript {version}", text_color=_OK)
+            return True, version
+        self.gs_status_label.configure(
+            text="⚠ This file did not respond like Ghostscript.", text_color=_WARN
+        )
+        return False, "Not a working Ghostscript executable"
 
-            if result.returncode == 0:
-                # Parse version from output
-                version_line = result.stdout.split("\n")[0]
-                self.gs_status_label.configure(
-                    text=f"✅ {version_line}",
-                    text_color="green"
-                )
-                return True, version_line
-            else:
-                self.gs_status_label.configure(
-                    text="⚠️ Executable failed to run",
-                    text_color="orange"
-                )
-                return False, "Executable failed"
+    # ------------------------------------------------------------------ #
+    # Save / cancel                                                        #
+    # ------------------------------------------------------------------ #
 
-        except subprocess.TimeoutExpired:
-            self.gs_status_label.configure(
-                text="⚠️ Execution timeout",
-                text_color="orange"
-            )
-            return False, "Timeout"
-        except Exception as e:
-            self.gs_status_label.configure(
-                text=f"⚠️ Error: {str(e)}",
-                text_color="orange"
-            )
-            return False, str(e)
-
-    def _validate_all_settings(self) -> Tuple[bool, List[str]]:
-        """
-        Validate all settings before saving.
+    def _validate(self) -> Tuple[bool, List[str], Optional[Path]]:
+        """Validate all fields.
 
         Returns:
-            Tuple of (all_valid, list_of_errors)
+            (ok, errors, output_dir) where output_dir is None for "same folder".
         """
-        errors = []
+        errors: List[str] = []
 
-        # Validate output folder if specified
-        output_folder = self.output_folder_entry.get().strip()
-        if output_folder and output_folder != "same_folder":
-            path = Path(output_folder)
-            if not path.exists():
-                errors.append(f"Output folder does not exist: {output_folder}")
-            elif not path.is_dir():
-                errors.append(f"Output path is not a directory: {output_folder}")
-            else:
-                # Check write permissions
-                try:
-                    test_file = path / ".squash_write_test"
-                    test_file.touch()
-                    test_file.unlink()
-                except Exception:
-                    errors.append(f"No write permission for folder: {output_folder}")
+        output_dir: Optional[Path] = None
+        folder_text = self.output_folder_entry.get().strip()
+        if folder_text and folder_text != SAME_FOLDER:
+            output_dir = Path(folder_text)
+            if not output_dir.exists():
+                if ask_yes_no(
+                    self,
+                    "Create Folder?",
+                    f"The output folder does not exist:\n{output_dir}\n\nCreate it now?",
+                    yes_text="Create",
+                    no_text="Cancel",
+                ):
+                    try:
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError as exc:
+                        errors.append(f"Could not create output folder: {exc}")
+                else:
+                    errors.append("Choose an existing output folder or leave it empty.")
+            elif not FileSystemHelper.is_writable_directory(output_dir):
+                errors.append(f"The output folder is not writable: {output_dir}")
 
-        # Validate Ghostscript path if specified
-        gs_path = self.gs_path_entry.get().strip()
-        if gs_path:
-            is_valid, error = self._validate_ghostscript_path(Path(gs_path))
-            if not is_valid:
-                errors.append(f"Invalid Ghostscript path: {error}")
+        pattern = self.pattern_entry.get().strip()
+        if pattern and "{filename}" not in pattern:
+            errors.append("The file name pattern must contain {filename}.")
 
-        return len(errors) == 0, errors
+        try:
+            timeout = int(self.timeout_entry.get().strip())
+            if not (_MIN_TIMEOUT <= timeout <= _MAX_TIMEOUT):
+                raise ValueError
+        except ValueError:
+            errors.append(
+                f"Time limit must be a whole number between {_MIN_TIMEOUT} and {_MAX_TIMEOUT}."
+            )
+
+        gs_text = self.gs_path_entry.get().strip()
+        if gs_text:
+            ok, detail = self._validate_ghostscript_path(Path(gs_text))
+            if not ok:
+                errors.append(f"Ghostscript: {detail}")
+
+        return not errors, errors, output_dir
 
     def _on_ok(self) -> None:
-        """Handle OK button - validate and save settings."""
-        # Validate all settings
-        is_valid, errors = self._validate_all_settings()
-
-        if not is_valid:
-            error_msg = "Please fix the following errors:\n\n" + "\n".join(f"• {e}" for e in errors)
-            self._show_error("Validation Errors", error_msg)
+        ok, errors, output_dir = self._validate()
+        if not ok:
+            show_error(self, "Check Your Settings", "\n".join(f"• {e}" for e in errors))
             return
 
-        # Save settings
-        try:
-            settings = self.config_manager.settings
+        settings = self.config_manager.settings
+        settings.theme = self.theme_var.get()
+        settings.output_location = str(output_dir) if output_dir else SAME_FOLDER
+        settings.output_naming_pattern = (
+            self.pattern_entry.get().strip() or Settings().output_naming_pattern
+        )
+        settings.compression_timeout = int(self.timeout_entry.get().strip())
+        settings.keep_larger_output = self.keep_larger_var.get()
+        settings.ghostscript_path = self.gs_path_entry.get().strip() or None
+        settings.log_level = self.log_level_var.get()
+        settings.check_updates = self.check_updates_var.get()
+        settings.store_history = self.store_history_var.get()
 
-            # Update theme
-            settings.theme = self.theme_var.get()
+        if not self.config_manager.save_settings(settings):
+            show_error(
+                self,
+                "Save Failed",
+                "Settings could not be written to disk.\nCheck that the AppData folder is writable.",
+            )
+            return
 
-            # Update output location
-            output_folder = self.output_folder_entry.get().strip()
-            settings.output_location = output_folder if output_folder else "same_folder"
-
-            # Update Ghostscript path
-            gs_path = self.gs_path_entry.get().strip()
-            settings.ghostscript_path = gs_path if gs_path else None
-
-            # Update log level
-            settings.log_level = self.log_level_var.get()
-
-            # Update privacy preferences
-            settings.check_updates = self.check_updates_var.get()
-
-            # Save to file
-            success = self.config_manager.save_settings(settings)
-
-            if success:
-                logger.info("Settings saved successfully")
-                self.destroy()
-            else:
-                self._show_error(
-                    "Save Failed",
-                    "Failed to save settings to file.\nPlease check file permissions."
-                )
-
-        except Exception as e:
-            logger.error(f"Error saving settings: {e}")
-            self._show_error("Error", f"An error occurred while saving settings:\n\n{str(e)}")
-
-    def _on_cancel(self) -> None:
-        """Handle Cancel button - discard changes and close."""
-        # Restore original theme
-        original_theme = self.original_settings.theme
-        ctk.set_appearance_mode(original_theme.capitalize())
-
-        logger.info("Settings dialog cancelled")
+        set_log_level(settings.normalized_log_level)
+        self.saved = True
+        logger.info("Settings saved")
         self.destroy()
 
-    def _show_error(self, title: str, message: str) -> None:
-        """
-        Show error dialog.
-
-        Args:
-            title: Error dialog title
-            message: Error message
-        """
-        error_dialog = ctk.CTkToplevel(self)
-        error_dialog.title(title)
-        error_dialog.geometry("450x250")
-        error_dialog.transient(self)
-        error_dialog.grab_set()
-        apply_icon(error_dialog)
-
-        # Center on settings dialog
-        self.update_idletasks()
-        x = self.winfo_x() + (self.winfo_width() - 450) // 2
-        y = self.winfo_y() + (self.winfo_height() - 250) // 2
-        error_dialog.geometry(f"+{x}+{y}")
-
-        label = ctk.CTkLabel(
-            error_dialog,
-            text=f"❌ {message}",
-            wraplength=400,
-            justify="left"
-        )
-        label.pack(padx=20, pady=20)
-
-        button = ctk.CTkButton(
-            error_dialog,
-            text="OK",
-            command=error_dialog.destroy
-        )
-        button.pack(pady=10)
+    def _on_cancel(self) -> None:
+        apply_appearance(self.original_settings.normalized_theme)
+        logger.info("Settings dialog cancelled")
+        self.destroy()

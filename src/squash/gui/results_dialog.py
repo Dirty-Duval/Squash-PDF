@@ -4,6 +4,8 @@ Results dialog for Squash PDF Compressor.
 Modal dialog displaying compression results with visual before/after comparisons.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Optional
@@ -11,272 +13,251 @@ from typing import Optional
 import customtkinter as ctk
 
 from ..core.batch import BatchResult
-from .components.charts import ComparisonBarChart
+from ..utils.filesystem import FileSystemHelper
 from ._icon import apply_icon
+from .components.charts import ComparisonBarChart
+from .dialogs import center_on_parent
 
 logger = logging.getLogger(__name__)
 
+_SUCCESS = ("#43A047", "#50C878")
+_WARNING = ("#E08A00", "#FFA500")
+_FAILED = ("#C62828", "#E74C3C")
+_MUTED = ("gray50", "gray60")
+
 
 class ResultsDialog(ctk.CTkToplevel):
-    """Modal dialog displaying compression results with visual comparisons.
-
-    Shows:
-    - Batch summary statistics (total files, success/failure counts)
-    - Per-file comparison charts showing size reduction
-    - Total size reduction and compression ratio
-
-    Attributes:
-        batch_result: BatchResult from compression operation
-    """
+    """Modal dialog displaying compression results with visual comparisons."""
 
     def __init__(self, parent, batch_result: BatchResult):
-        """Initialize results dialog.
-
+        """
         Args:
-            parent: Parent window (MainWindow)
-            batch_result: BatchResult with compression data for all files
+            parent: Parent window (MainWindow).
+            batch_result: BatchResult with compression data for all files.
         """
         super().__init__(parent)
-
         self.batch_result = batch_result
 
-        # Configure window
         self.title("Compression Results")
-        self.geometry("750x650")
-        self.resizable(True, True)
-
-        # Modal settings
+        self.geometry("780x680")
+        self.minsize(620, 480)
         self.transient(parent)
-        self.grab_set()
 
-        # Center on parent
-        self._center_on_parent(parent)
-
-        # Setup UI
         self._setup_ui()
 
-        # Keyboard shortcuts
-        self.bind("<Escape>", lambda e: self.destroy())
-        self.bind("<Return>", lambda e: self.destroy())
+        self.bind("<Escape>", lambda _e: self.destroy())
+        self.bind("<Return>", lambda _e: self.destroy())
 
         apply_icon(self)
+        center_on_parent(self, parent)
+        self.grab_set()
         self.focus()
 
-    def _center_on_parent(self, parent) -> None:
-        """Center dialog on parent window.
-
-        Args:
-            parent: Parent window
-        """
-        self.update_idletasks()
-
-        # Get parent geometry
-        parent_x = parent.winfo_x()
-        parent_y = parent.winfo_y()
-        parent_width = parent.winfo_width()
-        parent_height = parent.winfo_height()
-
-        # Get dialog size
-        dialog_width = self.winfo_width()
-        dialog_height = self.winfo_height()
-
-        # Calculate center position
-        x = parent_x + (parent_width - dialog_width) // 2
-        y = parent_y + (parent_height - dialog_height) // 2
-
-        # Set position
-        self.geometry(f"+{x}+{y}")
+    # ------------------------------------------------------------------ #
+    # Layout                                                               #
+    # ------------------------------------------------------------------ #
 
     def _setup_ui(self) -> None:
-        """Build dialog layout."""
-        # Configure grid
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=1)
 
-        # Header with summary
         self._create_summary_header()
-
-        # Scrollable frame with per-file comparisons
         self._create_file_comparisons()
-
-        # Close button
         self._create_button_frame()
 
     def _create_summary_header(self) -> None:
-        """Create header section with batch summary statistics."""
-        header_frame = ctk.CTkFrame(self, corner_radius=10)
-        header_frame.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
-        header_frame.grid_columnconfigure(0, weight=1)
+        result = self.batch_result
+        header = ctk.CTkFrame(self, corner_radius=10)
+        header.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+        header.grid_columnconfigure(0, weight=1)
 
-        # Title
-        title_label = ctk.CTkLabel(
-            header_frame,
-            text="Compression Complete",
-            font=ctk.CTkFont(size=18, weight="bold"),
+        title = "Compression Cancelled" if result.cancelled else "Compression Complete"
+        ctk.CTkLabel(header, text=title, font=ctk.CTkFont(size=18, weight="bold")).grid(
+            row=0, column=0, padx=20, pady=(15, 5), sticky="w"
         )
-        title_label.grid(row=0, column=0, padx=20, pady=(15, 5), sticky="w")
 
-        # Summary statistics
-        successful = self.batch_result.successful
-        failed = self.batch_result.failed
-        total = self.batch_result.total_files
-
-        # Calculate size reduction
-        original_mb = self.batch_result.total_size_before / (1024 * 1024)
-        compressed_mb = self.batch_result.total_size_after / (1024 * 1024)
-        saved_mb = original_mb - compressed_mb
-        reduction_percent = self.batch_result.total_reduction_percent
-
-        # Build summary text
-        if failed == 0:
-            status_icon = "✓"
-            status_text = f"Successfully compressed {successful} of {total} files"
-            status_color = ("green", "#50C878")
-        else:
-            status_icon = "⚠"
+        if result.cancelled:
             status_text = (
-                f"Compressed {successful} of {total} files ({failed} failed)"
+                f"Stopped after {result.processed} of {result.total_files} file(s): "
+                f"{result.successful} compressed, {result.failed} failed, "
+                f"{result.skipped} not started"
             )
-            status_color = ("orange", "#FFA500")
+            status_color = _MUTED
+        elif result.failed == 0:
+            status_text = (
+                f"✓ Successfully compressed {result.successful} of {result.total_files} files"
+            )
+            status_color = _SUCCESS
+        else:
+            status_text = (
+                f"⚠ Compressed {result.successful} of {result.total_files} files "
+                f"({result.failed} failed)"
+            )
+            status_color = _WARNING
 
-        # Status line
-        status_label = ctk.CTkLabel(
-            header_frame,
-            text=f"{status_icon} {status_text}",
-            font=ctk.CTkFont(size=13),
-            text_color=status_color,
-        )
-        status_label.grid(row=1, column=0, padx=20, pady=5, sticky="w")
+        ctk.CTkLabel(
+            header, text=status_text, font=ctk.CTkFont(size=13), text_color=status_color
+        ).grid(row=1, column=0, padx=20, pady=5, sticky="w")
 
-        # Size reduction line
-        size_text = (
-            f"Total reduction: {saved_mb:.1f} MB "
-            f"({original_mb:.1f} MB → {compressed_mb:.1f} MB)"
+        saved = result.total_size_before - result.total_size_after
+        before = FileSystemHelper.format_size(result.total_size_before)
+        after = FileSystemHelper.format_size(result.total_size_after)
+        if saved >= 0:
+            size_text = f"Total saved: {FileSystemHelper.format_size(saved)}  ({before} → {after})"
+            ratio_text = f"Overall reduction: {result.total_reduction_percent:.1f}%"
+        else:
+            size_text = (
+                f"Total size increased by {FileSystemHelper.format_size(-saved)}  "
+                f"({before} → {after})"
+            )
+            ratio_text = (
+                f"Overall change: +{-result.total_reduction_percent:.1f}% "
+                "(these PDFs were already well optimised)"
+            )
+        ctk.CTkLabel(header, text=size_text, font=ctk.CTkFont(size=12)).grid(
+            row=2, column=0, padx=20, pady=5, sticky="w"
         )
-        size_label = ctk.CTkLabel(
-            header_frame, text=size_text, font=ctk.CTkFont(size=12)
-        )
-        size_label.grid(row=2, column=0, padx=20, pady=5, sticky="w")
 
-        # Compression ratio line
-        ratio_text = f"Average compression ratio: {reduction_percent:.1f}%"
-        ratio_label = ctk.CTkLabel(
-            header_frame, text=ratio_text, font=ctk.CTkFont(size=12)
+        ctk.CTkLabel(header, text=ratio_text, font=ctk.CTkFont(size=12)).grid(
+            row=3, column=0, padx=20, pady=5, sticky="w"
         )
-        ratio_label.grid(row=3, column=0, padx=20, pady=5, sticky="w")
 
-        # Duration line
-        duration_text = f"Duration: {self.batch_result.duration:.1f} seconds"
-        duration_label = ctk.CTkLabel(
-            header_frame,
-            text=duration_text,
+        ctk.CTkLabel(
+            header,
+            text=f"Duration: {result.duration:.1f} seconds",
             font=ctk.CTkFont(size=11),
-            text_color=("gray60", "gray40"),
-        )
-        duration_label.grid(row=4, column=0, padx=20, pady=(5, 15), sticky="w")
+            text_color=_MUTED,
+        ).grid(row=4, column=0, padx=20, pady=(5, 15), sticky="w")
 
     def _create_file_comparisons(self) -> None:
-        """Create scrollable list of per-file comparison charts."""
-        # Label
-        label = ctk.CTkLabel(
-            self,
-            text="File-by-File Comparison:",
-            font=ctk.CTkFont(size=13, weight="bold"),
-        )
-        label.grid(row=1, column=0, padx=20, pady=(5, 5), sticky="w")
+        ctk.CTkLabel(
+            self, text="File-by-file comparison", font=ctk.CTkFont(size=13, weight="bold")
+        ).grid(row=1, column=0, padx=20, pady=(5, 5), sticky="w")
 
-        # Scrollable frame
-        scroll_frame = ctk.CTkScrollableFrame(self, height=350)
-        scroll_frame.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="nsew")
-        scroll_frame.grid_columnconfigure(0, weight=1)
+        scroll = ctk.CTkScrollableFrame(self)
+        scroll.grid(row=2, column=0, padx=20, pady=(0, 10), sticky="nsew")
+        scroll.grid_columnconfigure(0, weight=1)
 
-        # Add comparison chart for each file
-        chart_count = 0
+        row = 0
         for result in self.batch_result.file_results:
-            if result.success and result.compressed_size is not None:
-                # Create frame for this file's chart
-                chart_frame = ctk.CTkFrame(scroll_frame, corner_radius=8)
-                chart_frame.grid(
-                    row=chart_count, column=0, padx=5, pady=8, sticky="ew"
-                )
-                chart_frame.grid_columnconfigure(0, weight=1)
+            filename = Path(result.input_path).name
 
-                # Warn if output is larger than input
-                if getattr(result, "size_increased", False):
-                    warn_label = ctk.CTkLabel(
-                        chart_frame,
-                        text="⚠ Output is larger than input — this PDF may already be optimised",
-                        font=ctk.CTkFont(size=11),
-                        text_color=("orange", "#FFA500"),
-                    )
-                    warn_label.grid(row=0, column=0, padx=15, pady=(10, 0), sticky="w")
-
-                # Create comparison chart
-                try:
-                    filename = Path(result.input_path).name
-                    chart = ComparisonBarChart(chart_frame, width=680, height=90)
-                    chart.set_data(
-                        result.original_size, result.compressed_size, filename
-                    )
-                    chart.grid(row=1, column=0, padx=15, pady=15, sticky="ew")
-
-                    chart_count += 1
-
-                except Exception as e:
-                    logger.error(f"Failed to create chart for {result.input_path}: {e}")
-                    # Show error label instead
-                    error_label = ctk.CTkLabel(
-                        chart_frame,
-                        text=f"Error displaying chart for {Path(result.input_path).name}",
-                        text_color=("red", "#E74C3C"),
-                    )
-                    error_label.grid(row=1, column=0, padx=15, pady=10)
-
-            elif not result.success:
-                # Show failed file
-                failed_frame = ctk.CTkFrame(
-                    scroll_frame, corner_radius=8, fg_color=("gray90", "gray20")
-                )
-                failed_frame.grid(
-                    row=chart_count, column=0, padx=5, pady=8, sticky="ew"
-                )
-
-                filename = Path(result.input_path).name
-                error_msg = result.error_message or "Unknown error"
-
-                fail_label = ctk.CTkLabel(
-                    failed_frame,
-                    text=f"✗ {filename} - Failed: {error_msg}",
-                    text_color=("red", "#E74C3C"),
+            if result.cancelled:
+                frame = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("gray90", "gray20"))
+                frame.grid(row=row, column=0, padx=5, pady=6, sticky="ew")
+                ctk.CTkLabel(
+                    frame,
+                    text=f"■ {filename} - cancelled",
+                    text_color=_MUTED,
                     font=ctk.CTkFont(size=11),
-                )
-                fail_label.grid(row=0, column=0, padx=15, pady=10, sticky="w")
+                ).grid(row=0, column=0, padx=15, pady=10, sticky="w")
 
-                chart_count += 1
+            elif result.output_discarded:
+                frame = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("gray90", "gray20"))
+                frame.grid(row=row, column=0, padx=5, pady=6, sticky="ew")
+                frame.grid_columnconfigure(0, weight=1)
+                ctk.CTkLabel(
+                    frame,
+                    text=f"= {filename}  ({FileSystemHelper.format_size(result.original_size)})",
+                    text_color=_WARNING,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    anchor="w",
+                ).grid(row=0, column=0, padx=15, pady=(10, 2), sticky="w")
+                ctk.CTkLabel(
+                    frame,
+                    text=result.note or "Already optimised; the original was kept.",
+                    font=ctk.CTkFont(size=11),
+                    text_color=_MUTED,
+                    wraplength=640,
+                    justify="left",
+                    anchor="w",
+                ).grid(row=1, column=0, padx=15, pady=(0, 10), sticky="w")
 
-        # Show message if no charts to display
-        if chart_count == 0:
-            no_results_label = ctk.CTkLabel(
-                scroll_frame,
-                text="No compression results to display",
+            elif result.success and result.compressed_size is not None:
+                frame = ctk.CTkFrame(scroll, corner_radius=8)
+                frame.grid(row=row, column=0, padx=5, pady=6, sticky="ew")
+                frame.grid_columnconfigure(0, weight=1)
+
+                if result.size_increased:
+                    ctk.CTkLabel(
+                        frame,
+                        text="⚠ Output is larger than the original - this PDF was already "
+                        "well optimised. You may prefer to keep the original.",
+                        font=ctk.CTkFont(size=11),
+                        text_color=_WARNING,
+                        wraplength=640,
+                        justify="left",
+                    ).grid(row=0, column=0, padx=15, pady=(10, 0), sticky="w")
+
+                try:
+                    chart = ComparisonBarChart(frame, width=680, height=92)
+                    chart.set_data(result.original_size, result.compressed_size, filename)
+                    chart.grid(row=1, column=0, padx=15, pady=12, sticky="ew")
+                except Exception as exc:
+                    logger.error(f"Failed to create chart for {result.input_path}: {exc}")
+                    ctk.CTkLabel(
+                        frame,
+                        text=f"{filename}: {result.format_sizes()}",
+                        font=ctk.CTkFont(size=11),
+                    ).grid(row=1, column=0, padx=15, pady=10, sticky="w")
+
+            else:
+                frame = ctk.CTkFrame(scroll, corner_radius=8, fg_color=("gray90", "gray20"))
+                frame.grid(row=row, column=0, padx=5, pady=6, sticky="ew")
+                frame.grid_columnconfigure(0, weight=1)
+                ctk.CTkLabel(
+                    frame,
+                    text=f"✕ {filename}",
+                    text_color=_FAILED,
+                    font=ctk.CTkFont(size=12, weight="bold"),
+                    anchor="w",
+                ).grid(row=0, column=0, padx=15, pady=(10, 2), sticky="w")
+                ctk.CTkLabel(
+                    frame,
+                    text=result.error_message or "Unknown error",
+                    text_color=_FAILED,
+                    font=ctk.CTkFont(size=11),
+                    wraplength=640,
+                    justify="left",
+                    anchor="w",
+                ).grid(row=1, column=0, padx=15, pady=(0, 10), sticky="w")
+
+            row += 1
+
+        if row == 0:
+            ctk.CTkLabel(
+                scroll,
+                text="No files were processed.",
                 font=ctk.CTkFont(size=12, slant="italic"),
-                text_color=("gray60", "gray40"),
-            )
-            no_results_label.grid(row=0, column=0, padx=20, pady=20)
+                text_color=_MUTED,
+            ).grid(row=0, column=0, padx=20, pady=20)
 
     def _create_button_frame(self) -> None:
-        """Create button frame with Close button."""
-        button_frame = ctk.CTkFrame(self, fg_color="transparent")
-        button_frame.grid(row=3, column=0, padx=20, pady=(10, 20), sticky="ew")
-        button_frame.grid_columnconfigure(0, weight=1)
+        bar = ctk.CTkFrame(self, fg_color="transparent")
+        bar.grid(row=3, column=0, padx=20, pady=(10, 20), sticky="ew")
+        bar.grid_columnconfigure(1, weight=1)
 
-        # Close button (right-aligned)
-        close_button = ctk.CTkButton(
-            button_frame,
-            text="Close",
-            command=self.destroy,
-            width=120,
-            height=36,
-            font=ctk.CTkFont(size=13),
+        folder = self._output_folder()
+        if folder is not None:
+            ctk.CTkButton(
+                bar,
+                text="Open Output Folder",
+                width=160,
+                fg_color="transparent",
+                border_width=1,
+                text_color=("#1A1208", "#F0E8DC"),
+                command=lambda: FileSystemHelper.open_in_file_manager(folder),
+            ).grid(row=0, column=0, sticky="w")
+
+        ctk.CTkButton(bar, text="Close", width=120, height=36, command=self.destroy).grid(
+            row=0, column=2, sticky="e"
         )
-        close_button.grid(row=0, column=1, padx=5)
+
+    def _output_folder(self) -> Optional[Path]:
+        """Folder containing the first compressed file, if any."""
+        for result in self.batch_result.file_results:
+            if result.success and result.output_path:
+                folder = Path(result.output_path).parent
+                if folder.exists():
+                    return folder
+        return None

@@ -1,6 +1,6 @@
 # Squash PDF Compressor - User Guide
 
-**Version 2.0** | Simple PDF compression for Windows
+**Version 2.2** | Simple PDF compression for Windows
 
 ---
 
@@ -321,39 +321,34 @@ This file is automatically created when you save your first custom preset. You c
 
 ## Settings
 
-### General Settings
+Open Settings from the status bar. Changes take effect when you click Save; Cancel reverts them (including a previewed theme).
 
-**Default Quality Preset**
-- Choose which preset is selected by default
+### Appearance
 
-**Output Location**
-- Same folder as original (default)
-- Custom folder (choose specific directory)
+- **Theme**: System (follows Windows), Light or Dark. The choice is previewed immediately.
 
-**Theme**
-- System (follows Windows theme)
-- Light mode
-- Dark mode
+### Output
 
-### Advanced Settings
+- **Save to**: leave empty to save next to each original (default), or choose a folder. If the folder does not exist yet, Squash offers to create it. The main window always shows the current destination under the presets.
+- **File name**: a pattern using `{filename}` for the original name, for example `{filename}_compressed.pdf` or `small_{filename}.pdf`. A live example is shown. Existing files are never overwritten; a number is added instead.
 
-**Compression Timeout**
-- Maximum time per file (default: 300 seconds)
-- Increase for very large files
+### Compression
 
-**Log Level**
-- Controls amount of logging
-- Options: Error, Warning, Info, Debug
+- **Time limit per file**: default 300 seconds (30-3600). A file that takes longer is stopped and reported as failed. Very large scanned PDFs may need more.
 
-### Privacy Settings
+### Ghostscript
 
-**Check for Updates**
-- Automatically check for new versions (requires internet)
-- Default: Enabled
+- Leave the executable empty to use the copy that ships with Squash, or Browse to your own installation. Auto-detect finds the bundled or system copy and the status line confirms the version.
 
-**Store History**
-- Keep history of compressed files
-- Default: Enabled
+### Logging & Privacy
+
+- **Log level**: DEBUG records every Ghostscript command; use it when reporting a problem. Open Log Folder opens `%APPDATA%\Squash\logs`.
+- **Check for updates on startup**: contacts GitHub once at launch. Default: on.
+- **Keep a local history of compressed files**: default on.
+
+**Reset to Defaults** fills every field with the defaults; nothing is saved until you click Save.
+
+The last-used preset and the window size are remembered automatically.
 
 ---
 
@@ -380,14 +375,20 @@ This file is automatically created when you save your first custom preset. You c
 
 ---
 
-**"Compression Failed" Error**
+**A file is marked "Failed" in the results**
 
-**Cause**: File uses unsupported PDF features
+The results view says why in plain language:
 
-**Solution**:
-- Try a different quality preset
-- Check if PDF is password-protected
-- Verify sufficient disk space
+- *"This PDF is password-protected"*: remove the password in your PDF viewer first, then compress.
+- *"The file could not be read. It may be damaged or not a valid PDF"*: open the file in a PDF viewer to confirm it works; try re-exporting it from the original application.
+- *"Compression took longer than N seconds"*: raise the time limit in Settings > Compression.
+- *Permission or disk errors*: check that the output folder is writable and has free space.
+
+Failed and unfinished files stay in the list so you can try again; successfully compressed files are removed from it.
+
+**"Already optimised, original kept"**
+
+Ghostscript re-encodes every image and font, so a PDF that already uses tighter encodings (scanned documents stored as JBIG2, optimised web PDFs) would come out *larger*. When that happens Squash deletes the larger output, keeps your original untouched and tells you how much bigger it would have been. If you want the converted file anyway (for example to force RGB colours), enable *Keep the compressed file even when it is larger than the original* in Settings > Compression.
 
 ---
 
@@ -454,7 +455,7 @@ A: No! Text remains crisp and readable. Only images are compressed.
 
 **Q: Can I compress password-protected PDFs?**
 
-A: Not currently. Remove the password first, then compress.
+A: No. Squash detects them and reports "This PDF is password-protected" instead of producing a broken file. Remove the password first, then compress.
 
 **Q: Can I undo compression?**
 
@@ -519,15 +520,28 @@ A: For most cases, use **Medium** (default). Use **Small** for email, **High** f
 
 | Shortcut | Action |
 |----------|--------|
-| Ctrl+O | Open file dialog |
-| F1 | Show help/about |
-| Esc | Cancel compression |
+| Ctrl+O | Add files |
+| Ctrl+Shift+O | Add folder |
+| Ctrl+Enter | Compress now |
+| Esc | Cancel the running compression |
+| F1 | About |
 
 ---
 
 ## Version History
 
-**v2.0.0** (Current)
+**v2.2.0** (Current)
+- Output folder, file name pattern, time limit and log level settings now work
+- Cancel button, real page-by-page progress, speed and time remaining
+- Plain-language errors for damaged and password-protected files
+- Pages are no longer auto-rotated; High Quality keeps original colours
+- Add Folder, Clear All, Open Output Folder, Duplicate preset, colour handling per preset
+- Windows open sized to their content
+
+**v2.1.0**
+- Automatic updates from GitHub Releases, brand theme and icon
+
+**v2.0.0**
 - Ground-up rebuild with modern architecture
 - Improved GUI with CustomTkinter
 - 3 simple quality presets
@@ -575,4 +589,4 @@ Full license: [LICENSE](../LICENSE)
 
 **Thank you for using Squash!** 🎉
 
-*Last Updated: 2025-12-10 | Version 2.0.0*
+*Last Updated: 2026-10-10 | Version 2.2.0*

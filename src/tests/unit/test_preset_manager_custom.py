@@ -9,7 +9,7 @@ import pytest
 from pathlib import Path
 import json
 import tempfile
-from src.squash.core.presets import PresetManager, Preset
+from squash.core.presets import PresetManager, Preset
 
 
 class TestCustomPresetCRUD:
@@ -29,7 +29,7 @@ class TestCustomPresetCRUD:
             mono_image_resolution=600,
             pdf_settings="/ebook",
             target_reduction="40-60%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute
@@ -57,7 +57,7 @@ class TestCustomPresetCRUD:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
         manager.add_custom_preset(custom_preset)
 
@@ -82,7 +82,7 @@ class TestCustomPresetCRUD:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
         manager.add_custom_preset(original)
 
@@ -97,7 +97,7 @@ class TestCustomPresetCRUD:
             mono_image_resolution=600,
             pdf_settings="/printer",
             target_reduction="40-60%",
-            is_custom=True
+            is_custom=True,
         )
         result = manager.update_preset("update_test", updated)
 
@@ -124,7 +124,7 @@ class TestCustomPresetCRUD:
             mono_image_resolution=300,
             pdf_settings="/screen",
             target_reduction="70-90%",
-            is_custom=False
+            is_custom=False,
         )
 
         # Execute & Assert
@@ -145,7 +145,7 @@ class TestCustomPresetCRUD:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
         manager.add_custom_preset(custom)
         assert "delete_test" in manager.get_preset_names()
@@ -196,7 +196,7 @@ class TestPresetValidation:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute & Assert
@@ -217,7 +217,7 @@ class TestPresetValidation:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute & Assert
@@ -238,7 +238,7 @@ class TestPresetValidation:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute & Assert
@@ -259,7 +259,7 @@ class TestPresetValidation:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute & Assert
@@ -280,7 +280,7 @@ class TestPresetValidation:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute & Assert
@@ -301,7 +301,7 @@ class TestPresetValidation:
             mono_image_resolution=300,
             pdf_settings="/invalid",  # Not a valid setting
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute & Assert
@@ -326,7 +326,7 @@ class TestPresetPersistence:
             mono_image_resolution=600,
             pdf_settings="/printer",
             target_reduction="40-60%",
-            is_custom=True
+            is_custom=True,
         )
         manager1.add_custom_preset(custom)
 
@@ -346,7 +346,8 @@ class TestPresetPersistence:
     def test_json_corruption_handling(self, tmp_path, monkeypatch):
         """Test that corrupted JSON doesn't crash the manager."""
         # Setup - manually create corrupted JSON file
-        from src.squash.utils.filesystem import FileSystemHelper
+        from squash.utils.filesystem import FileSystemHelper
+
         presets_dir = FileSystemHelper.get_app_data_dir() / "presets"
         FileSystemHelper.ensure_directory(presets_dir)
         corrupt_file = presets_dir / "custom_presets.json"
@@ -410,8 +411,8 @@ class TestPresetImportExport:
                 "mono_image_resolution": 400,
                 "pdf_settings": "/ebook",
                 "target_reduction": "45-65%",
-                "is_custom": True
-            }
+                "is_custom": True,
+            },
         }
 
         with open(import_path, "w", encoding="utf-8") as f:
@@ -441,7 +442,7 @@ class TestPresetImportExport:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
         manager.add_custom_preset(custom)
 
@@ -459,8 +460,8 @@ class TestPresetImportExport:
                 "mono_image_resolution": 600,
                 "pdf_settings": "/printer",
                 "target_reduction": "40-60%",
-                "is_custom": True
-            }
+                "is_custom": True,
+            },
         }
 
         with open(import_path, "w", encoding="utf-8") as f:
@@ -525,7 +526,7 @@ class TestBuiltinProtection:
             mono_image_resolution=999,
             pdf_settings="/screen",
             target_reduction="99%",
-            is_custom=True  # Try to force it
+            is_custom=True,  # Try to force it
         )
 
         # Execute & Assert
@@ -569,7 +570,7 @@ class TestEdgeCases:
             mono_image_resolution=300,
             pdf_settings="/ebook",
             target_reduction="50-70%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute
@@ -596,7 +597,7 @@ class TestEdgeCases:
             mono_image_resolution=50,
             pdf_settings="/screen",
             target_reduction="90%",
-            is_custom=True
+            is_custom=True,
         )
         max_dpi = Preset(
             name="max_dpi",
@@ -608,7 +609,7 @@ class TestEdgeCases:
             mono_image_resolution=2400,
             pdf_settings="/prepress",
             target_reduction="10%",
-            is_custom=True
+            is_custom=True,
         )
 
         # Execute
@@ -641,7 +642,7 @@ class TestEdgeCases:
                 mono_image_resolution=300,
                 pdf_settings=setting,
                 target_reduction="50%",
-                is_custom=True
+                is_custom=True,
             )
             result = manager.add_custom_preset(preset)
             assert result is True

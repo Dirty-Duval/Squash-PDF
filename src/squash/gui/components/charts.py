@@ -9,11 +9,9 @@ Canvas-based chart widgets for visualizing compression data:
 
 import tkinter as tk
 from datetime import datetime
-from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 import logging
 
-import customtkinter as ctk
 
 from .theme_colors import ChartTheme
 
@@ -55,9 +53,7 @@ class ComparisonBarChart(tk.Canvas):
         self._compressed_size: Optional[int] = None
         self._filename: str = ""
 
-    def set_data(
-        self, original_size: int, compressed_size: int, filename: str = ""
-    ) -> None:
+    def set_data(self, original_size: int, compressed_size: int, filename: str = "") -> None:
         """Update chart with size comparison data.
 
         Args:
@@ -66,16 +62,18 @@ class ComparisonBarChart(tk.Canvas):
             filename: Optional filename to display above bars
 
         Raises:
-            ValueError: If compressed_size > original_size or sizes are negative
+            ValueError: If either size is negative.
+
+        Note:
+            A compressed size larger than the original is allowed (Ghostscript
+            can grow an already-optimised PDF); the bars are scaled to the
+            larger of the two and the summary reports an increase.
 
         Example:
             >>> chart.set_data(5242880, 2097152, "document.pdf")
         """
         if original_size < 0 or compressed_size < 0:
             raise ValueError("File sizes cannot be negative")
-
-        if compressed_size > original_size:
-            raise ValueError("Compressed size cannot exceed original size")
 
         self._original_size = original_size
         self._compressed_size = compressed_size
@@ -128,12 +126,11 @@ class ComparisonBarChart(tk.Canvas):
             )
             y_offset += 16
 
-        # Calculate bar widths
-        if self._original_size > 0:
-            original_width = bar_area_width
-            compressed_width = int(
-                (self._compressed_size / self._original_size) * bar_area_width
-            )
+        # Calculate bar widths relative to the larger of the two sizes
+        largest = max(self._original_size, self._compressed_size)
+        if largest > 0:
+            original_width = int((self._original_size / largest) * bar_area_width)
+            compressed_width = int((self._compressed_size / largest) * bar_area_width)
         else:
             original_width = 0
             compressed_width = 0
@@ -213,17 +210,25 @@ class ComparisonBarChart(tk.Canvas):
         if self._original_size > 0:
             reduction_bytes = self._original_size - self._compressed_size
             reduction_percent = (reduction_bytes / self._original_size) * 100
-            reduction_mb = reduction_bytes / (1024 * 1024)
 
-            reduction_text = (
-                f"Reduction: {reduction_mb:.1f} MB ({reduction_percent:.1f}%)"
-            )
+            if reduction_bytes >= 0:
+                reduction_text = (
+                    f"Reduction: {ChartTheme.format_size(reduction_bytes)} "
+                    f"({reduction_percent:.1f}%)"
+                )
+                colour = self._colors["success"]
+            else:
+                reduction_text = (
+                    f"Increase: {ChartTheme.format_size(-reduction_bytes)} "
+                    f"({-reduction_percent:.1f}%)"
+                )
+                colour = self._colors["warning"]
 
             self.create_text(
                 bar_start_x,
                 y_offset + bar_height + 10,
                 text=reduction_text,
-                fill=self._colors["success"],
+                fill=colour,
                 anchor="w",
                 font=("Arial", 9, "italic"),
                 tags="label",
@@ -329,9 +334,7 @@ class TrendLineChart(tk.Canvas):
 
         # Plot data
         if len(self._data) == 1:
-            self._plot_single_point(
-                margin_left, margin_top, plot_width, plot_height
-            )
+            self._plot_single_point(margin_left, margin_top, plot_width, plot_height)
         else:
             self._plot_line(margin_left, margin_top, plot_width, plot_height)
 
@@ -352,9 +355,7 @@ class TrendLineChart(tk.Canvas):
             tags="empty",
         )
 
-    def _draw_axes(
-        self, margin_left: int, margin_top: int, width: int, height: int
-    ) -> None:
+    def _draw_axes(self, margin_left: int, margin_top: int, width: int, height: int) -> None:
         """Draw X and Y axes."""
         # Y-axis (vertical)
         self.create_line(
@@ -404,9 +405,7 @@ class TrendLineChart(tk.Canvas):
             tags="label",
         )
 
-    def _draw_grid(
-        self, margin_left: int, margin_top: int, width: int, height: int
-    ) -> None:
+    def _draw_grid(self, margin_left: int, margin_top: int, width: int, height: int) -> None:
         """Draw horizontal grid lines."""
         for i in range(5):  # 0%, 25%, 50%, 75%, 100%
             y = margin_top + height - (i * height / 4)
@@ -456,9 +455,7 @@ class TrendLineChart(tk.Canvas):
             tags="label",
         )
 
-    def _plot_line(
-        self, margin_left: int, margin_top: int, width: int, height: int
-    ) -> None:
+    def _plot_line(self, margin_left: int, margin_top: int, width: int, height: int) -> None:
         """Plot connected line through multiple data points."""
         if len(self._data) < 2:
             return
@@ -666,9 +663,7 @@ class PresetComparisonBar(tk.Canvas):
             tags="empty",
         )
 
-    def _draw_axes(
-        self, margin_left: int, margin_top: int, width: int, height: int
-    ) -> None:
+    def _draw_axes(self, margin_left: int, margin_top: int, width: int, height: int) -> None:
         """Draw axes and labels."""
         # Y-axis (vertical)
         self.create_line(
@@ -717,9 +712,7 @@ class PresetComparisonBar(tk.Canvas):
             tags="label",
         )
 
-    def _draw_bars(
-        self, margin_left: int, margin_top: int, width: int, height: int
-    ) -> None:
+    def _draw_bars(self, margin_left: int, margin_top: int, width: int, height: int) -> None:
         """Draw bars for each preset."""
         if not self._data:
             return

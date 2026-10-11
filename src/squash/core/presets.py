@@ -2,7 +2,7 @@
 Preset management for compression quality settings.
 """
 
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict
 from typing import Dict, Any, List, Optional
 from pathlib import Path
 import logging
@@ -26,6 +26,9 @@ class Preset:
     pdf_settings: str
     target_reduction: str
     is_custom: bool = False  # Flag to distinguish custom from built-in presets
+    # Ghostscript ColorConversionStrategy: /RGB (smaller), /Gray (smallest),
+    # /LeaveColorUnchanged (safest for print / CMYK documents)
+    color_conversion: str = "/RGB"
 
     def to_ghostscript_params(self) -> Dict[str, Any]:
         """
@@ -34,7 +37,8 @@ class Preset:
         Returns:
             Dictionary of Ghostscript parameters
         """
-        return {
+        params: Dict[str, Any] = {
+            # PDFSETTINGS must come first: later explicit parameters override it.
             "PDFSETTINGS": self.pdf_settings,
             "ColorImageResolution": self.color_image_resolution,
             "GrayImageResolution": self.gray_image_resolution,
@@ -42,15 +46,31 @@ class Preset:
             "ColorImageDownsampleType": "/Bicubic",
             "GrayImageDownsampleType": "/Bicubic",
             "MonoImageDownsampleType": "/Subsample",
-            "ColorConversionStrategy": "/RGB",
             "DownsampleColorImages": True,
             "DownsampleGrayImages": True,
             "DownsampleMonoImages": True,
+            # /screen and /ebook default to PageByPage auto-rotation, which
+            # silently rotates landscape pages based on text direction. Never
+            # rotate: users expect the compressed PDF to look like the original.
+            "AutoRotatePages": "/None",
+            "ColorConversionStrategy": self.color_conversion,
         }
+        if self.color_conversion == "/Gray":
+            params["ProcessColorModel"] = "/DeviceGray"
+        return params
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert preset to dictionary."""
         return asdict(self)
+
+
+COLOR_CONVERSION_OPTIONS: Dict[str, str] = {
+    "/LeaveColorUnchanged": "Keep original colors",
+    "/RGB": "Convert to RGB (smaller)",
+    "/Gray": "Convert to grayscale (smallest)",
+}
+
+VALID_PDF_SETTINGS = ["/screen", "/ebook", "/printer", "/prepress", "/default"]
 
 
 class PresetManager:
@@ -90,6 +110,7 @@ class PresetManager:
             mono_image_resolution=600,
             pdf_settings="/printer",
             target_reduction="30-50%",
+            color_conversion="/LeaveColorUnchanged",
         ),
     }
 
@@ -178,7 +199,7 @@ class PresetManager:
                     preset = Preset(**preset_dict)
 
                     # Validate before adding
-                    is_valid, error = self._validate_preset(preset)
+                    is_valid, error = self.validate_preset(preset)
                     if is_valid:
                         self.presets[preset.name] = preset
                         loaded_count += 1
@@ -206,9 +227,7 @@ class PresetManager:
         try:
             # Collect only custom presets
             custom_presets = [
-                preset.to_dict()
-                for preset in self.presets.values()
-                if preset.is_custom
+                preset.to_dict() for preset in self.presets.values() if preset.is_custom
             ]
 
             data = {"version": "2.0.0", "presets": custom_presets}
@@ -229,7 +248,7 @@ class PresetManager:
             logger.error(f"Failed to save custom presets: {e}")
             return False
 
-    def _validate_preset(self, preset: Preset) -> tuple[bool, Optional[str]]:
+    def validate_preset(self, preset: Preset) -> tuple[bool, Optional[str]]:
         """
         Validate preset data.
 
@@ -261,11 +280,16 @@ class PresetManager:
             return False, "Mono image resolution must be 50-2400 DPI"
 
         # Validate PDF settings
-        valid_pdf_settings = ["/screen", "/ebook", "/printer", "/prepress", "/default"]
-        if preset.pdf_settings not in valid_pdf_settings:
-            return False, f"PDF settings must be one of: {', '.join(valid_pdf_settings)}"
+        if preset.pdf_settings not in VALID_PDF_SETTINGS:
+            return False, f"PDF settings must be one of: {', '.join(VALID_PDF_SETTINGS)}"
+
+        if preset.color_conversion not in COLOR_CONVERSION_OPTIONS:
+            return False, f"Color conversion must be one of: {', '.join(COLOR_CONVERSION_OPTIONS)}"
 
         return True, None
+
+    # Backwards-compatible alias
+    _validate_preset = validate_preset
 
     def add_custom_preset(self, preset: Preset) -> bool:
         """
@@ -284,7 +308,7 @@ class PresetManager:
         preset.is_custom = True
 
         # Validate preset
-        is_valid, error = self._validate_preset(preset)
+        is_valid, error = self.validate_preset(preset)
         if not is_valid:
             raise ValueError(f"Invalid preset: {error}")
 
@@ -333,7 +357,7 @@ class PresetManager:
         preset.is_custom = True
 
         # Validate new preset data
-        is_valid, error = self._validate_preset(preset)
+        is_valid, error = self.validate_preset(preset)
         if not is_valid:
             raise ValueError(f"Invalid preset: {error}")
 
@@ -466,7 +490,7 @@ class PresetManager:
             preset = Preset(**preset_dict)
 
             # Validate
-            is_valid, error = self._validate_preset(preset)
+            is_valid, error = self.validate_preset(preset)
             if not is_valid:
                 raise ValueError(f"Invalid preset: {error}")
 

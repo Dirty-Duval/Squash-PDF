@@ -2,7 +2,7 @@
 History management for Squash PDF Compressor.
 
 This module provides SQLite-based history tracking for compression operations.
-Stores the last 50 compression operations with full metadata.
+Stores the most recent compression operations with full metadata.
 """
 
 import logging
@@ -49,16 +49,60 @@ class HistoryEntry:
     error_message: Optional[str] = None
 
 
+def _to_db_timestamp(value: datetime) -> str:
+    """Serialise a datetime for storage (sortable ISO-8601 with a space separator)."""
+    return value.isoformat(sep=" ")
+
+
+def _from_db_timestamp(value: str) -> datetime:
+    """Parse a stored timestamp (tolerates legacy sqlite adapter output)."""
+    try:
+        return datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return datetime.min
+
+
+def _row_to_entry(row: sqlite3.Row) -> HistoryEntry:
+    return HistoryEntry(
+        id=row["id"],
+        input_path=row["input_path"],
+        output_path=row["output_path"],
+        preset_name=row["preset_name"],
+        original_size=row["original_size"],
+        compressed_size=row["compressed_size"],
+        compression_ratio=row["compression_ratio"],
+        duration=row["duration"],
+        timestamp=_from_db_timestamp(row["timestamp"]),
+        success=bool(row["success"]),
+        error_message=row["error_message"],
+    )
+
+
+def _result_to_row(r: CompressionResult) -> tuple:
+    return (
+        r.input_path,
+        r.output_path or "",
+        r.preset_used,
+        r.original_size,
+        r.compressed_size or 0,
+        r.reduction_percent or 0.0,
+        r.duration,
+        _to_db_timestamp(r.timestamp),
+        1 if r.success else 0,
+        r.error_message,
+    )
+
+
 class HistoryManager:
     """Manages compression history using SQLite database.
 
-    Stores the last 50 compression operations with automatic cleanup.
+    Keeps the most recent MAX_ENTRIES operations with automatic cleanup.
     Database location: %APPDATA%/Squash/history/history.db
 
     Thread-safe: Creates new connection for each operation.
     """
 
-    MAX_ENTRIES = 50
+    MAX_ENTRIES = 500
 
     def __init__(self, db_path: Optional[Path] = None):
         """Initialize HistoryManager.
@@ -95,8 +139,7 @@ class HistoryManager:
                 cursor = conn.cursor()
 
                 # Create history table
-                cursor.execute(
-                    """
+                cursor.execute("""
                     CREATE TABLE IF NOT EXISTS history (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         input_path TEXT NOT NULL,
@@ -110,23 +153,18 @@ class HistoryManager:
                         success BOOLEAN DEFAULT 1,
                         error_message TEXT
                     )
-                    """
-                )
+                    """)
 
                 # Create indexes for performance
-                cursor.execute(
-                    """
+                cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_timestamp
                     ON history(timestamp DESC)
-                    """
-                )
+                    """)
 
-                cursor.execute(
-                    """
+                cursor.execute("""
                     CREATE INDEX IF NOT EXISTS idx_success
                     ON history(success)
-                    """
-                )
+                    """)
 
                 conn.commit()
                 logger.debug("Database schema created/verified")
@@ -159,18 +197,7 @@ class HistoryManager:
                         duration, timestamp, success, error_message
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
-                    (
-                        result.input_path,
-                        result.output_path or "",
-                        result.preset_used,
-                        result.original_size,
-                        result.compressed_size or 0,
-                        result.reduction_percent or 0.0,
-                        result.duration,
-                        result.timestamp,
-                        result.success,
-                        result.error_message,
-                    ),
+                    _result_to_row(result),
                 )
 
                 # Enforce MAX_ENTRIES limit
@@ -210,21 +237,7 @@ class HistoryManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                rows = [
-                    (
-                        r.input_path,
-                        r.output_path or "",
-                        r.preset_used,
-                        r.original_size,
-                        r.compressed_size or 0,
-                        r.reduction_percent or 0.0,
-                        r.duration,
-                        r.timestamp,
-                        r.success,
-                        r.error_message,
-                    )
-                    for r in results
-                ]
+                rows = [_result_to_row(r) for r in results]
 
                 cursor.executemany(
                     """
@@ -282,23 +295,7 @@ class HistoryManager:
                     (limit,),
                 )
 
-                entries = []
-                for row in cursor.fetchall():
-                    entries.append(
-                        HistoryEntry(
-                            id=row["id"],
-                            input_path=row["input_path"],
-                            output_path=row["output_path"],
-                            preset_name=row["preset_name"],
-                            original_size=row["original_size"],
-                            compressed_size=row["compressed_size"],
-                            compression_ratio=row["compression_ratio"],
-                            duration=row["duration"],
-                            timestamp=datetime.fromisoformat(row["timestamp"]),
-                            success=bool(row["success"]),
-                            error_message=row["error_message"],
-                        )
-                    )
+                entries = [_row_to_entry(row) for row in cursor.fetchall()]
 
                 logger.debug(f"Retrieved {len(entries)} history entries")
                 return entries
@@ -331,23 +328,7 @@ class HistoryManager:
                     (f"%{query}%", self.MAX_ENTRIES),
                 )
 
-                entries = []
-                for row in cursor.fetchall():
-                    entries.append(
-                        HistoryEntry(
-                            id=row["id"],
-                            input_path=row["input_path"],
-                            output_path=row["output_path"],
-                            preset_name=row["preset_name"],
-                            original_size=row["original_size"],
-                            compressed_size=row["compressed_size"],
-                            compression_ratio=row["compression_ratio"],
-                            duration=row["duration"],
-                            timestamp=datetime.fromisoformat(row["timestamp"]),
-                            success=bool(row["success"]),
-                            error_message=row["error_message"],
-                        )
-                    )
+                entries = [_row_to_entry(row) for row in cursor.fetchall()]
 
                 logger.debug(f"Search '{query}' found {len(entries)} entries")
                 return entries
@@ -395,7 +376,7 @@ class HistoryManager:
                     DELETE FROM history
                     WHERE timestamp < ?
                     """,
-                    (cutoff_date,),
+                    (_to_db_timestamp(cutoff_date),),
                 )
 
                 deleted_count = cursor.rowcount
@@ -425,17 +406,15 @@ class HistoryManager:
                 cursor = conn.cursor()
 
                 # Get aggregated statistics
-                cursor.execute(
-                    """
+                cursor.execute("""
                     SELECT
                         COUNT(*) as total_files,
-                        SUM(original_size) as total_original,
-                        SUM(compressed_size) as total_compressed,
-                        AVG(compression_ratio) as avg_ratio,
+                        SUM(CASE WHEN success = 1 THEN original_size ELSE 0 END) as total_original,
+                        SUM(CASE WHEN success = 1 THEN compressed_size ELSE 0 END) as total_compressed,
+                        AVG(CASE WHEN success = 1 THEN compression_ratio END) as avg_ratio,
                         SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successful
                     FROM history
-                    """
-                )
+                    """)
 
                 row = cursor.fetchone()
 
@@ -491,8 +470,7 @@ class HistoryManager:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
 
-                cursor.execute(
-                    """
+                cursor.execute("""
                     SELECT
                         preset_name,
                         AVG(compression_ratio) as avg_ratio,
@@ -504,8 +482,7 @@ class HistoryManager:
                     WHERE success = 1
                     GROUP BY preset_name
                     ORDER BY avg_ratio DESC
-                    """
-                )
+                    """)
 
                 results = {}
                 for row in cursor.fetchall():
@@ -547,12 +524,12 @@ class HistoryManager:
                       AND timestamp >= ?
                     ORDER BY timestamp ASC
                     """,
-                    (cutoff_date.isoformat(),),
+                    (_to_db_timestamp(cutoff_date),),
                 )
 
                 results = []
                 for row in cursor.fetchall():
-                    timestamp = datetime.fromisoformat(row[0])
+                    timestamp = _from_db_timestamp(row[0])
                     ratio = row[1]
                     results.append((timestamp, ratio))
 

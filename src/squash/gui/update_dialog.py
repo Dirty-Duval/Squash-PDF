@@ -15,6 +15,7 @@ import customtkinter as ctk
 from ..config.manager import ConfigManager
 from ..utils.updater import ReleaseInfo, UpdateChecker
 from ._icon import apply_icon
+from .dialogs import center_on_parent
 
 logger = logging.getLogger(__name__)
 
@@ -55,14 +56,13 @@ class UpdateDialog(ctk.CTkToplevel):
         self.geometry("520x500")
         self.minsize(480, 440)
         self.resizable(False, False)
+        self.transient(parent)
         self.grab_set()  # modal
         self.focus()
 
-        # Centre over parent after geometry is applied
-        self.after(50, self._centre_on_parent)
-
         apply_icon(self)
         self._build_ui()
+        center_on_parent(self, parent)
 
     # ------------------------------------------------------------------ #
     # UI construction                                                      #
@@ -85,8 +85,7 @@ class UpdateDialog(ctk.CTkToplevel):
 
         ctk.CTkLabel(
             header,
-            text=f"You have version {self._current_version()}.  "
-                 f"Would you like to update now?",
+            text=f"You have version {self._current_version()}.  " f"Would you like to update now?",
             font=ctk.CTkFont(size=12),
         ).grid(row=1, column=0, padx=20, pady=(0, 14), sticky="w")
 
@@ -180,9 +179,7 @@ class UpdateDialog(ctk.CTkToplevel):
         self._progress_bar.grid()
         self._safe_set_status("Downloading installer…")
 
-        self._download_thread = threading.Thread(
-            target=self._download_worker, daemon=True
-        )
+        self._download_thread = threading.Thread(target=self._download_worker, daemon=True)
         self._download_thread.start()
 
     # ------------------------------------------------------------------ #
@@ -211,9 +208,7 @@ class UpdateDialog(ctk.CTkToplevel):
         def _update():
             if self.winfo_exists():
                 self._progress_bar.set(ratio)
-                self._safe_set_status(
-                    f"Downloading… {mb_done:.1f} / {mb_total:.1f} MB"
-                )
+                self._safe_set_status(f"Downloading… {mb_done:.1f} / {mb_total:.1f} MB")
 
         self.after(0, _update)
 
@@ -250,15 +245,8 @@ class UpdateDialog(ctk.CTkToplevel):
         if self.winfo_exists():
             self._status_label.configure(text=text)
 
-    def _centre_on_parent(self) -> None:
-        if not self.winfo_exists():
-            return
-        parent = self.master
-        px = parent.winfo_x() + (parent.winfo_width() - self.winfo_width()) // 2
-        py = parent.winfo_y() + (parent.winfo_height() - self.winfo_height()) // 2
-        self.geometry(f"+{max(0, px)}+{max(0, py)}")
-
     @staticmethod
     def _current_version() -> str:
-        from ..utils.updater import APP_VERSION
-        return APP_VERSION
+        from .. import __version__
+
+        return __version__

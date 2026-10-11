@@ -1,6 +1,6 @@
 # Squash API Reference
 
-Complete API documentation for Squash PDF Compressor v2.0
+Complete API documentation for Squash PDF Compressor v2.2
 
 ---
 
@@ -23,12 +23,15 @@ Main compression engine for PDF processing.
 
 #### CompressionEngine
 
-**Class**: `CompressionEngine(ghostscript_path: Optional[Path] = None)`
+**Class**: `CompressionEngine(ghostscript_path: Optional[Path] = None, preset_manager: Optional[PresetManager] = None)`
 
 Main PDF compression engine using Ghostscript.
 
 **Parameters**:
-- `ghostscript_path` (Path, optional): Custom Ghostscript executable path. If None, auto-detects.
+- `ghostscript_path` (Path, optional): Custom Ghostscript executable path. If None (or the path does not exist), the bundled or system copy is auto-detected.
+- `preset_manager` (PresetManager, optional): Shared preset manager. Created if omitted.
+
+**Raises**: `RuntimeError` if no Ghostscript executable can be found.
 
 **Methods**:
 
@@ -41,23 +44,24 @@ def compress(
     output_path: Optional[Path] = None,
     preset: str = "medium",
     timeout: int = 300,
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
 ) -> CompressionResult
 ```
 
-Compress a PDF file.
+Compress a PDF file. Per-file problems are reported in the returned
+`CompressionResult` (see [Error Codes](#error-codes)); this method does not raise for them.
 
 **Parameters**:
 - `input_path` (Path): Path to input PDF file
-- `output_path` (Path, optional): Path for output file. If None, generates `{filename}_compressed.pdf`
-- `preset` (str): Quality preset name (`"small"`, `"medium"`, `"high"`)
+- `output_path` (Path, optional): Path for output file. If None, generates `{filename}_compressed.pdf` next to the input, made unique if it exists. The output is never allowed to overwrite the input (`E008`).
+- `preset` (str): Preset name (built-in `"small"`, `"medium"`, `"high"` or a custom preset)
 - `timeout` (int): Maximum compression time in seconds (default: 300)
+- `progress_callback` (Callable, optional): Called as `callback(page, total_pages)` while Ghostscript runs. `total_pages` may be 0 if not yet known.
+- `cancel_event` (threading.Event, optional): When set, Ghostscript is killed and the result has `error_code == "E006"`.
+- `keep_larger` (bool): Keep an output that is larger than the input. By default such output is deleted and the result is a success with `output_discarded=True`, `compressed_size == original_size`, `reduction_percent == 0.0` and a `note` explaining how much larger it would have been.
 
 **Returns**: `CompressionResult` with operation details
-
-**Raises**:
-- `FileNotFoundError`: If input file doesn't exist
-- `ValueError`: If preset is invalid
-- `RuntimeError`: If Ghostscript fails
 
 **Example**:
 ```python
@@ -436,39 +440,79 @@ def process_batch(
     input_paths: List[Path],
     preset: str = "medium",
     recursive: bool = False,
-    progress_callback: Optional[Callable[[int, int, str], None]] = None,
+    output_dir: Optional[Path] = None,
+    naming_pattern: str = "{filename}_compressed.pdf",
+    timeout: int = 300,
+    progress_callback: Optional[Callable[[BatchProgress], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+    result_callback: Optional[Callable[[CompressionResult], None]] = None,
 ) -> BatchResult
 ```
 
-Process multiple PDFs.
+Process multiple PDFs in the order given (folder contents sorted, duplicates dropped).
 
 **Parameters**:
 - `input_paths` (List[Path]): List of file/folder paths
 - `preset` (str): Quality preset name
 - `recursive` (bool): Process folders recursively
-- `progress_callback` (Callable, optional): Callback function `(current, total, filename)`
+- `output_dir` (Path, optional): Destination folder, created if missing. None writes next to each original.
+- `naming_pattern` (str): Output name pattern containing `{filename}` (the source stem). Invalid characters are replaced and `.pdf` is appended if missing. Existing files are never overwritten; a numeric suffix is added instead.
+- `timeout` (int): Per-file Ghostscript time limit in seconds
+- `progress_callback` (Callable, optional): Receives `BatchProgress` snapshots (see below)
+- `cancel_event` (threading.Event, optional): When set, the batch stops after the current page and `BatchResult.cancelled` is True
+- `result_callback` (Callable, optional): Called with each file's `CompressionResult` as soon as it finishes
+- `keep_larger` (bool): Forwarded to `CompressionEngine.compress`
 
 **Returns**: `BatchResult` with operation details
+
+**Raises**: `OSError` if `output_dir` cannot be created.
 
 **Example**:
 ```python
 from pathlib import Path
-from squash.core.batch import BatchProcessor
+from squash.core.batch import BatchProcessor, BatchProgress
 
 processor = BatchProcessor()
 
-def progress(current, total, filename):
-    print(f"[{current}/{total}] {filename}")
+def progress(p: BatchProgress):
+    print(f"[{p.index}/{p.total}] {p.path.name} {p.detail} "
+          f"{p.overall_progress:.0%} {p.speed_mbps:.1f} MB/s eta {p.eta_seconds:.0f}s")
 
 result = processor.process_batch(
     input_paths=[Path("folder/")],
     preset="small",
     recursive=True,
-    progress_callback=progress
+    output_dir=Path("compressed/"),
+    progress_callback=progress,
 )
 
 print(result.get_summary())
 ```
+
+##### resolve_output_path()
+
+```python
+def resolve_output_path(
+    input_path: Path,
+    output_dir: Optional[Path] = None,
+    naming_pattern: str = "{filename}_compressed.pdf",
+) -> Path
+```
+
+Module-level helper that computes the destination for one file using the rules above.
+
+#### BatchProgress
+
+**Dataclass**: `BatchProgress`
+
+- `index` (int): 1-based index of the current file
+- `total` (int): Number of files in the batch
+- `path` (Path): Current file
+- `file_progress` (float): 0.0-1.0 for the current file (from Ghostscript page markers)
+- `overall_progress` (float): 0.0-1.0, weighted by file size
+- `speed_mbps` (float): Average throughput so far
+- `eta_seconds` (float): Estimated remaining time (0 if unknown)
+- `detail` (str): `"starting"`, `"page 3 of 12"`, `"done"`
 
 #### BatchResult
 
@@ -484,7 +528,10 @@ Result of batch PDF compression.
 - `total_size_after` (int): Total compressed size in bytes
 - `total_reduction_percent` (float): Overall reduction percentage
 - `duration` (float): Total processing time in seconds
-- `file_results` (List[CompressionResult]): Individual file results
+- `file_results` (List[CompressionResult]): Individual file results (only files that were attempted)
+- `cancelled` (bool): True if the batch was stopped by a cancel event
+
+**Properties**: `processed` (files attempted), `skipped` (files never started because of cancellation)
 
 **Methods**:
 
@@ -507,10 +554,12 @@ Ghostscript wrapper for PDF processing.
 Wrapper for Ghostscript PDF processing.
 
 **Parameters**:
-- `gs_path` (Path, optional): Custom Ghostscript executable path
+- `gs_path` (Path, optional): Custom Ghostscript executable path. Falls back to `detect_ghostscript()` if None or missing.
 
 **Attributes**:
 - `gs_path` (Path): Path to Ghostscript executable
+
+**Raises**: `RuntimeError` if no executable is found.
 
 **Methods**:
 
@@ -523,30 +572,51 @@ def compress(
     output_path: Path,
     params: Dict[str, Any],
     timeout: int = 300,
-) -> bool
+    progress_callback: Optional[Callable[[int, int], None]] = None,
+    cancel_event: Optional[threading.Event] = None,
+) -> None
 ```
 
-Compress PDF using Ghostscript.
+Compress PDF using Ghostscript. Output is written to a temporary `.part` file next to
+`output_path` and moved into place only on success, so a failed, cancelled or timed-out
+run never leaves a partial PDF behind.
 
 **Parameters**:
 - `input_path` (Path): Input PDF path
 - `output_path` (Path): Output PDF path
-- `params` (Dict): Ghostscript parameters
+- `params` (Dict): Ghostscript `-d` parameters (booleans become `-dKey` / `-dKey=false`)
 - `timeout` (int): Maximum execution time in seconds
+- `progress_callback` (Callable, optional): `callback(page, total_pages)` driven by Ghostscript's `Processing pages 1 through N.` and `Page N` output
+- `cancel_event` (threading.Event, optional): Kills Ghostscript when set
 
-**Returns**: `True` if successful, `False` otherwise
+**Raises**: `GhostscriptError` with a `code` of `password`, `corrupt`, `permission`, `disk`,
+`timeout`, `cancelled`, `no_output`, `launch` or `unknown`, a user-readable `message` and a
+`detail` excerpt for the log. Ghostscript exits with status 0 for encrypted input, so the output
+text is inspected as well as the return code.
 
-**Raises**:
-- `subprocess.TimeoutExpired`: If compression exceeds timeout
-- `subprocess.CalledProcessError`: If Ghostscript fails
+##### build_command()
+
+```python
+def build_command(self, input_path: Path, output_path: Path, params: Dict[str, Any]) -> List[str]
+```
+
+Returns the argument list that `compress()` runs (useful for logging and tests).
 
 ##### validate_pdf()
 
 ```python
-def validate_pdf(self, path: Path) -> bool
+@staticmethod
+def validate_pdf(path: Path) -> bool
 ```
 
-Validate if file is a proper PDF (checks for PDF header).
+Cheap structural check: looks for `%PDF` within the first 1024 bytes (the specification allows leading junk).
+
+#### Module functions
+
+- `detect_ghostscript() -> Optional[Path]`: bundled copy (frozen build, then source tree), then `gswin64c`/`gswin32c`/`gs` on PATH.
+- `parse_progress_line(line) -> Optional[Tuple[str, int]]`: `("total", n)` or `("page", n)`.
+- `classify_error(output, returncode) -> Tuple[code, message, detail]`.
+- `escape_output_path(path) -> str`: doubles `%` for `-sOutputFile`.
 
 ##### get_version()
 
@@ -649,7 +719,7 @@ Application settings.
 **Attributes**:
 
 **General**:
-- `version` (str): Settings version (default: "2.0.0")
+- `version` (str): Always stamped with the running `squash.__version__` when loaded
 - `default_preset` (str): Default quality preset (default: "medium")
 - `output_location` (str): Output folder setting (default: "same_folder")
 - `output_naming_pattern` (str): Output file naming (default: "{filename}_compressed.pdf")
@@ -1209,8 +1279,11 @@ See `CompressionResult` and `BatchResult` dataclasses above.
 | E001 | Input file not found | Check file path and try again |
 | E002 | Invalid PDF file or corrupted | Verify PDF opens in reader |
 | E003 | Invalid preset | Use "small", "medium", or "high" |
-| E004 | Ghostscript compression failed | Try different preset or check file |
+| E004 | Ghostscript could not process the file (damaged, password-protected, permission or disk problem; `error_message` says which) | Follow the message; remove passwords, check free space |
 | E005 | Unexpected error | Check logs, report if persists |
+| E006 | Cancelled by the user | Nothing; partial output was discarded |
+| E007 | Timed out | Raise the time limit in Settings |
+| E008 | Output path equals input path | Choose another output folder or name pattern |
 
 ### System Errors
 
@@ -1361,13 +1434,14 @@ class CustomMainWindow(MainWindow):
 
 ## Version Compatibility
 
-**Current Version**: 2.0.0
+**Current Version**: 2.2.0 (defined once in `squash.__version__`)
 
-**Python**: 3.11+
+**Python**: 3.11+ (developed on 3.13)
 
 **Dependencies**:
 - customtkinter >= 5.2.0
 - pillow >= 10.0.0
+- tkinterdnd2 >= 0.4.0
 
 **External**:
 - Ghostscript >= 9.50 (10.x recommended)
@@ -1382,10 +1456,10 @@ class CustomMainWindow(MainWindow):
 - Setup Guide: [../SETUP.md](../SETUP.md)
 
 **Issues**:
-- Bug Reports: https://github.com/ACWul/Squash/issues
-- Feature Requests: https://github.com/ACWul/Squash/issues
+- Bug Reports: https://github.com/Dirty-Duval/Squash-PDF/issues
+- Feature Requests: https://github.com/Dirty-Duval/Squash-PDF/issues
 
 ---
 
-**Last Updated**: 2025-12-10
-**Version**: 2.0.0
+**Last Updated**: 2026-10-10
+**Version**: 2.2.0
